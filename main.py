@@ -268,7 +268,7 @@ def fetch_mt5_data(symbol, timeframe, n_bars=300):
     df['time'] = pd.to_datetime(df['time'], unit='s')
     return df
 
-def run_bot():
+dedef run_bot():
     if not mt5.initialize():
         print("MT5 Initialization failed")
         mt5.shutdown()
@@ -281,8 +281,10 @@ def run_bot():
         algeria_tz = pytz.timezone("Africa/Algiers")
         now = datetime.now(algeria_tz)
         
+        # الشرط الحاسم: إذا كان اليوم عطلة (السبت/الأحدا) أو الوقت خارج الفترة المحددة، يتوقف تماماً ولا يفعل شيئاً
         if now.weekday() not in ALLOWED_DAYS or not (START_HOUR <= now.hour < END_HOUR):
-            time.sleep(60)
+            print(f"[{now.strftime('%H:%M:%S')}] السوق مغلق أو خارج أوقات العمل (11:00 - 20:00). البوت في وضع الاسترخاء...")
+            time.sleep(300)  # ينتظر 5 دقائق ثم يعود للفحص بهدوء دون إزعاج
             continue
             
         for symbol in FOREX_PAIRS:
@@ -295,7 +297,6 @@ def run_bot():
             result = analyze_market(df_m5, df_m15)
             
             if result and result['score'] >= MIN_SCORE_REQUIRED:
-                # منع إرسال إشارات متتالية على نفس الزوج خلال ساعتين
                 if time.time() - last_signal_time.get(symbol, 0) < 7200:
                     continue
                 last_signal_time[symbol] = time.time()
@@ -316,5 +317,3 @@ def run_bot():
                 
         time.sleep(60)
 
-if __name__ == "__main__":
-    run_bot()
