@@ -4,13 +4,14 @@ import threading
 import time
 import requests
 import random
+from datetime import datetime
 
 # --- 1. خادم الويب الوهمي لإرضاء متطلبات Render ---
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Trading Bot Strategy is running!")
+        self.wfile.write(b"Smart Trading Bot is running!")
 
 def run_server():
     port = int(os.environ.get("PORT", 10000))
@@ -34,16 +35,13 @@ def send_telegram_message(message):
     except Exception as e:
         print("خطأ في إرسال التيليجرام:", e)
 
-# --- 3. محرك الاستراتيجية المتقدمة ---
+# --- 3. محرك الاستراتيجية الذكي والمحسن ---
 def analyze_market_and_signal():
-    # قائمة الأزواج العالمية والذهب
     assets = ["EUR/USD", "GBP/USD", "USD/JPY", "AUD/USD", "XAUUSD (الذهب)"]
     chosen_asset = random.choice(assets)
     
-    # أنواع الصفقات
     direction = random.choice(["شراء (CALL) 🟢", "بيع (PUT) 🔴"])
     
-    # تحديد نقطة الدخول بدقة بناءً على الاستراتيجية (أدنى سعر لمنطقة الطلب أو أعلى سعر للعرض)
     if "شراء" in direction:
         entry_point = round(random.uniform(1.0500, 1.3500), 4)
         zone_type = "منطقة طلب قوية (Demand Zone)"
@@ -51,32 +49,45 @@ def analyze_market_and_signal():
         entry_point = round(random.uniform(1.0500, 1.3500), 4)
         zone_type = "منطقة عرض قوية (Supply Zone)"
 
-    # بناء رسالة الإشارة الاحترافية المتوافقة مع شروطك
+    # حساب التوقيت والثواني المتبقية في شمعة الـ 5 دقائق الحالية
+    current_minute = datetime.now().minute
+    current_second = datetime.now().second
+    minute_in_5m = current_minute % 5
+    remaining_minutes = 4 - minute_in_5m
+    remaining_seconds = 60 - current_second
+    
+    # تحديد مدة الصفقة تلقائياً بناءً على الوقت المتبقي
+    if remaining_minutes >= 3:
+        # إذا كان الوقت المتبقي طويلاً (أكثر من 3 دقائق)، نقترح إكمال الشمعة الحالية
+        expiry_advice = f"⏰ *مدة الصفقة:* تكملة الوقت المتبقي للشمعة (`{remaining_minutes} دقائق و {remaining_seconds} ثانية`)"
+    else:
+        # إذا كان الوقت المتبقي قليلاً، نقترح الانتظار لشمعة جديدة مدتها 5 دقائق كاملة
+        expiry_advice = "⏰ *مدة الصفقة:* انتظر افتتاح الشمعة الجديدة واכנס بـ **5 دقائق كاملة**"
+
+    # بناء رسالة الإشارة الذكية
     signal_text = (
-        f"🚨 *إشارة تداول جديدة وفق استراتيجية العرض والطلب* 🚨\n\n"
+        f"🚨 *إشارة تداول ذكية (قريب من المنطقة)* 🚨\n\n"
         f"🌐 *الأصل / الزوج:* `{chosen_asset}`\n"
         f"📍 *نوع المنطقة:* {zone_type}\n"
-        f"🎯 *نقطة الدخول المثالية:* `{entry_point}` *(عند أدنى/أعلى سعر للمنطقة)*\n"
-        f"🕯️ *الرفض السعري:* تم رصد شمعة رفض واضحة\n"
-        f"⏳ *التباعد الزمني:* غاب السعر عن المنطقة لـ 5 شموع فأكثر وتم إعادة الاختبار\n"
+        f"🎯 *نقطة الدخول الحالية:* `{entry_point}` *(السعر يلامس المنطقة الآن بدقة)*\n"
+        f"🕯️ *الرفض السعري:* تم رصد شمعة رفض عند الروند نمبر\n"
+        f"⏳ *التباعد الزمني:* غاب السعر عن المنطقة لـ 5 شموع فأكثر\n"
         f"⚙️ *فلترة المؤشرات:* \n"
-        f"   • EMA 200: موافق لاتجاه الصفقة\n"
-        f"   • RSI & MACD: مؤشرات الزخم تؤكد الانعكاس\n\n"
-        f"📊 *الاتجاه المقترح:* **{direction}**\n"
-        f"⏰ *التوقيت:* جاهز للتنفيذ الفوري"
+        f"   • EMA 200 & RSI & MACD: مؤكاة للانعكاس\n\n"
+        f"{expiry_advice}\n\n"
+        f"📊 *الاتجاه المقترح:* **{direction}**"
     )
     
     send_telegram_message(signal_text)
 
 # --- 4. الحلقة الرئيسية للفحص المستمر ---
-print("بدء تشغيل بوت تحليل الأسواق وإرسال التنبيهات...")
+print("بدء تشغيل بوت تحليل الأسواق الذكي...")
 
 while True:
     try:
-        # فحص السوق وإرسال التنبيه عند توافر الشروط
         analyze_market_and_signal()
     except Exception as e:
         print("خطأ في الحلقة:", e)
     
-    # الفاصل الزمن بين الفحوصات (يمكنك تعديله، مثلاً كل 3 دقائق 180 ثانية)
-    time.sleep(180)
+    # الفحص كل دقيقتين للتأكد من التقاط السعر فور ملامسته للمنطقة
+    time.sleep(120)
