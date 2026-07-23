@@ -14,7 +14,7 @@ class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Ultimate Master Trading Bot is running securely!")
+        self.wfile.write(b"FVG & 10-Candles Strict Bot is running securely!")
     def log_message(self, format, *args):
         return
 
@@ -85,28 +85,25 @@ def track_trade_result(ticker, asset_name, signal_direction):
     except Exception as e:
         print("خطأ في تتبع النتيجة:", e)
 
-# --- 3. المحرك الشامل والنهائي (علاج كافة الأخطاء السابقة) ---
-def analyze_master_market():
+# --- 3. المحرك النهائي المدعوم بـ FVG وغياب 10 شموع ---
+def analyze_fvg_market():
     global daily_signals_count, last_reset_day
 
     algeria_tz = pytz.timezone('Africa/Algiers')
     now_algeria = datetime.now(algeria_tz)
     
-    current_day = now_algeria.weekday()  # من 0 (الإثنين) إلى 4 (الجمعة)
+    current_day = now_algeria.weekday()
     current_hour = now_algeria.hour
     current_date = now_algeria.date()
 
-    # إعادة التعيين وتصفير العداد يومياً بدقة
     if last_reset_day != current_date:
         last_reset_day = current_date
         daily_signals_count = 0
         print(f"بداية يوم جديد. تم تصفير عداد الصفقات (الحد الأقصى: {MAX_DAILY_SIGNALS}).")
 
-    # 1. الالتزام بأيام العمل (الإثنين إلى الجمعة) وأوقات العمل (11 صباحاً إلى 8 مساءً)
     if current_day > 4 or not (11 <= current_hour < 20):
         return
         
-    # 2. التقيد بالحد الأقصى لعدد الصفقات في اليوم (15 صفقة كحد أقصى)
     if daily_signals_count >= MAX_DAILY_SIGNALS:
         return
 
@@ -119,15 +116,13 @@ def analyze_master_market():
         "NZD/USD": "NZDUSD=X",
         "EUR/GBP": "EURGBP=X",
         "EUR/JPY": "EURJPY=X",
-        "GBP/JPY": "GBPJPY=X",
-    
+        "GBP/JPY": "GBPJPY=X"
     }
 
     for asset_name, ticker in tickers.items():
         if daily_signals_count >= MAX_DAILY_SIGNALS:
             break
         try:
-            # 3. جلب بيانات كافية ومستقرة لإطار M5
             data = yf.download(ticker, period="3d", interval="5m", progress=False)
             if data.empty or len(data) < 200:
                 continue
@@ -147,40 +142,57 @@ def analyze_master_market():
             ema_200 = float(close.ewm(span=200, adjust=False).mean().iloc[-1])
             rsi = float(calculate_rsi(close).iloc[-1])
 
+            # بولنجر باند
+            bb_middle = close.rolling(window=20).mean()
+            bb_std = close.rolling(window=20).std()
+            bb_upper = bb_middle + (bb_std * 2)
+            bb_lower = bb_middle - (bb_std * 2)
+            current_upper = float(bb_upper.iloc[-2])
+            current_lower = float(bb_lower.iloc[-2])
+
             prev_high = float(high.iloc[-2])
             prev_low = float(low.iloc[-2])
             prev_open = float(open_p.iloc[-2])
             prev_close = float(close.iloc[-2])
             candle_size = prev_high - prev_low
 
-            # 4. شروط غياب السعر عن منطقة Order Block لـ 5 شموع فأكثر
-            recent_lows = low.iloc[-20:-5]
-            recent_highs = high.iloc[-20:-5]
+            prev2_open = float(open_p.iloc[-3])
+            prev2_close = float(close.iloc[-3])
+            prev3_low = float(low.iloc[-4])
+            prev3_high = float(high.iloc[-4])
+
+            # شرط غياب السعر عن المنطقة لـ 10 شموع فأكثر (فحص النطاق الزمني السابق)
+            recent_lows = low.iloc[-30:-10]
+            recent_highs = high.iloc[-30:-10]
+
+            # فحص الفراغ السعري (Fair Value Gap - FVG)
+            # صاعد: إذا كان أدنى سعر للشمعة الحالية أعلى من أعلى سعر للشمعة قبل السابقة بفارق معتبر
+            is_bullish_fvg = prev_low > prev3_high
+            # هابط: إذا كان أعلى سعر للشمعة الحالية أقل من أدنى سعر للشمعة قبل السابقة بفارق معتبر
+            is_bearish_fvg = prev_high < prev3_low
 
             is_valid_setup = False
             signal_type = ""
             zone_desc = ""
 
-            # 5. شروط صارمة جداً جداً لمنع أي إشارات عشوائية أو أرقام غير مطابقة لمنصة Quotex
-            # الاعتماد على الهيكل، الاتجاه، تشبعات RSI الحقيقية، والرفض السعري النقي (بدون طباعة أرقام سعرية مطلقة خاطئة)
-            
-            # أ) منطقة طلب قوية (Bullish Order Block)
-            if current_price > ema_200 and rsi < 35:
+            # الشروط الصارمة جداً مع شرط FVG وغياب 10 شموع
+            if current_price > ema_200 and rsi < 30 and prev_low <= current_lower:
                 if len(recent_lows) > 0 and all(l > (current_price - 0.005) for l in recent_lows):
                     lower_wick = min(prev_open, prev_close) - prev_low
-                    if candle_size > 0 and (lower_wick / candle_size > 0.55): # ريجيكشن بذيل يتجاوز 55%
-                        is_valid_setup = True
-                        signal_type = "شراء (CALL) 🟢"
-                        zone_desc = "منطقة طلب مؤسسية (Bullish Order Block)"
+                    if prev_close > prev_open and prev2_close > prev2_open:
+                        if candle_size > 0 and (lower_wick / candle_size > 0.55) and is_bullish_fvg:
+                            is_valid_setup = True
+                            signal_type = "شراء (CALL) 🟢"
+                            zone_desc = "منطقة طلب مع فراغ سعري (Bullish Order Block + FVG)"
 
-            # ب) منطقة عرض قوية (Bearish Order Block)
-            elif current_price < ema_200 and rsi > 65:
+            elif current_price < ema_200 and rsi > 70 and prev_high >= current_upper:
                 if len(recent_highs) > 0 and all(h < (current_price + 0.005) for h in recent_highs):
                     upper_wick = prev_high - max(prev_open, prev_close)
-                    if candle_size > 0 and (upper_wick / candle_size > 0.55): # ريجيكشن بذيل يتجاوز 55%
-                        is_valid_setup = True
-                        signal_type = "بيع (PUT) 🔴"
-                        zone_desc = "منطقة عرض مؤسسية (Bearish Order Block)"
+                    if prev_close < prev_open and prev2_close < prev2_open:
+                        if candle_size > 0 and (upper_wick / candle_size > 0.55) and is_bearish_fvg:
+                            is_valid_setup = True
+                            signal_type = "بيع (PUT) 🔴"
+                            zone_desc = "منطقة عرض مع فراغ سعري (Bearish Order Block + FVG)"
 
             if is_valid_setup and signal_type:
                 if daily_signals_count >= MAX_DAILY_SIGNALS:
@@ -189,15 +201,14 @@ def analyze_master_market():
                 daily_signals_count += 1
                 score = random.randint(99, 100)
 
-                # رسالة ذكية ومتوافقة مع كوتكس (بدون أرقام سعرية مطلقة خاطئة)
                 signal_text = (
-                    f"💎 *إشارة Order Block الاحترافية المتكاملة* 💎\n"
+                    f"💎 *إشارة Order Block الاحترافية (مع FVG)* 💎\n"
                     f"📊 *ترتيب الصفقة اليومي:* `{daily_signals_count} من {MAX_DAILY_SIGNALS}` (مستوى الجودة: `{score}/100`)\n\n"
                     f"🌐 *الأصل / الزوج:* `{asset_name}`\n"
                     f"📍 *نوع المنطقة:* {zone_desc}\n"
-                    f"🕯️ *الرفض السعري (Rejection):* ذيل شمعة نقي وقوي جداً (>55%)\n"
-                    f"⏳ *التباعد الزمني:* غاب السعر عن المنطقة لـ 5 شموع فأكثر وتم احترامها\n"
-                    f"⚙️ *فلترة المؤشرات:* EMA 200 و RSI متوافقان تماماً\n"
+                    f"⏳ *التباعد الزمني:* غاب السعر عن المنطقة لـ **10 شموع فأكثر** وتم احترامها\n"
+                    f"⚡ *فحص الفراغ (FVG):* تم رصد فراغ سعري مؤسسي مؤكد\n"
+                    f"🕯️ *الرفض والبولنجر:* ملامسة تامة + شمعتا تأكيد + ذيل رفض (>55%)\n"
                     f"⏳ *مدة الصفقة:* `5 دقائق كاملة`\n\n"
                     f"📊 *الاتجاه المقترح:* **{signal_type}**\n"
                     f"🕒 *التوقيت المحلي (الجزائر):* `{now_algeria.strftime('%Y-%m-%d %H:%M:%S')}`"
@@ -205,26 +216,24 @@ def analyze_master_market():
 
                 send_telegram_message(signal_text)
 
-                # 6. متابعة وتتبع نتيجة الصفقة تلقائياً بعد 5 دقائق
                 threading.Thread(
                     target=track_trade_result, 
                     args=(ticker, asset_name, signal_type)
                 ).start()
 
-                # 7. فترة استراحة مطولة بعد إرسال الإشارة لضمان عدم التكرار والعشوائية
-                time.sleep(900)
+                # استراحة إجبارية طويلة لمنع أي تكرار
+                time.sleep(1800)
 
         except Exception as e:
             continue
 
-# --- 4. حلقة التشغيل الفائق الاستقرار ---
-print("البوت الشامل يعمل الآن بكافة شروط الأمان ومنع العشوائية...")
+# --- 4. حلقة التشغيل ---
+print("البوت يعمل الآن بأعلى معايير FVG وغياب 10 شموع...")
 
 while True:
     try:
-        analyze_master_market()
+        analyze_fvg_market()
     except Exception as e:
         pass
     
-    # فحص هادئ ومستقر كل 10 دقائق لتجنب التذبذبات اللحظية الخاطئة
     time.sleep(600)
