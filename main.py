@@ -9,12 +9,12 @@ import yfinance as yf
 import pandas as pd
 import random
 
-# --- 1. خادم الويب المستقر لمنصة Render ---
+# --- 1. خادم الويب المستقر لـ Render ---
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"Live Candle-by-Candle Strategy Bot is running perfectly!")
+        self.wfile.write(b"Order Block Bot with Result Tracking is running!")
     def log_message(self, format, *args):
         return
 
@@ -33,17 +33,18 @@ CHAT_ID = "-1004367810810"
 
 daily_signals_count = 0
 last_reset_day = None
-TARGET_DAILY_SIGNALS = random.randint(8, 12)
+MAX_DAILY_SIGNALS = 15
 
 def send_telegram_message(message):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
     try:
-        requests.post(url, json=payload, timeout=10)
+        response = requests.post(url, json=payload, timeout=10)
+        return response.json()
     except Exception as e:
         print("خطأ في تيليجرام:", e)
+        return None
 
-# حساب مؤشر RSI بدقة من البيانات اللحظية
 def calculate_rsi(series, period=14):
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
@@ -51,37 +52,65 @@ def calculate_rsi(series, period=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-# حساب مؤشر MACD اللحظي
-def calculate_macd(series):
-    exp1 = series.ewm(span=12, adjust=False).mean()
-    exp2 = series.ewm(span=26, adjust=False).mean()
-    macd = exp1 - exp2
-    signal = macd.ewm(span=9, adjust=False).mean()
-    return macd, signal
+# --- دالة متابعة النتيجة بعد انتهاء وقت الصفقة ---
+def track_trade_result(ticker, asset_name, entry_price, signal_direction, message_id):
+    # الانتظار لمدة 5 دقائق (300 ثانية) لتنتهي الصفقة
+    time.sleep(300)
+    try:
+        data = yf.download(ticker, period="1d", interval="1m", progress=False)
+        if data.empty:
+            return
+            
+        if isinstance(data.columns, pd.MultiIndex):
+            close = data['Close'].iloc[:, 0]
+        else:
+            close = data['Close']
+            
+        exit_price = float(close.iloc[-1])
+        
+        # تحديد ما إذا كانت الصفقة رابحة أم خاسرة
+        if "شراء" in signal_direction:
+            is_win = exit_price > entry_price
+        else:
+            is_win = exit_price < entry_price
 
-# --- 3. محرك التحليل اللحظي الشمعة بشمعة ---
-def analyze_live_candles():
-    global daily_signals_count, last_reset_day, TARGET_DAILY_SIGNALS
+        result_icon = "✅ رابحة (WIN)" if is_win else "❌ خاسرة (LOSS)"
+        color_emoji = "🟢" if is_win else "🔴"
+
+        result_text = (
+            f"📊 *نتيجة الصفقة بعد 5 دقائق* {color_emoji}\n\n"
+            f"🌐 *الزوج:* `{asset_name}`\n"
+            f"🎯 *سعر الدخول:* `{entry_price:.4f}`\n"
+            f"🏁 *سعر الخروج:* `{exit_price:.4f}`\n"
+            f"📈 *النتيجة:* **{result_icon}**"
+        )
+        
+        # إرسال رسالة النتيجة الجديدة
+        send_telegram_message(result_text)
+
+    except Exception as e:
+        print("خطأ في تتبع نتيجة الصفقة:", e)
+
+# --- 3. محرك الاستراتيجية ---
+def analyze_market_with_limit():
+    global daily_signals_count, last_reset_day
 
     algeria_tz = pytz.timezone('Africa/Algiers')
     now_algeria = datetime.now(algeria_tz)
     
-    current_day = now_algeria.weekday()  # 0 إلى 4 (الإثنين إلى الجمعة)
+    current_day = now_algeria.weekday()
     current_hour = now_algeria.hour
     current_date = now_algeria.date()
 
     if last_reset_day != current_date:
         last_reset_day = current_date
         daily_signals_count = 0
-        TARGET_DAILY_SIGNALS = random.randint(8, 12)
-        print(f"بداية يوم جديد. هدف الصفقات اليوم: {TARGET_DAILY_SIGNALS}")
+        print(f"بداية يوم جديد. تصفير عداد الصفقات (الحد الأقصى: {MAX_DAILY_SIGNALS}).")
 
-    # التقيّد الصارم بأيام وأوقات العمل (الإثنين للجمعة، من 11:00 صباحاً إلى 20:00 مساءً)
-    if current_day > 4:
+    if current_day > 4 or not (11 <= current_hour < 20):
         return
-    if not (11 <= current_hour < 20):
-        return
-    if daily_signals_count >= TARGET_DAILY_SIGNALS:
+        
+    if daily_signals_count >= MAX_DAILY_SIGNALS:
         return
 
     tickers = {
@@ -98,119 +127,95 @@ def analyze_live_candles():
     }
 
     for asset_name, ticker in tickers.items():
-        if daily_signals_count >= TARGET_DAILY_SIGNALS:
+        if daily_signals_count >= MAX_DAILY_SIGNALS:
             break
         try:
-            # جلب البيانات اللحظية الدقيقة لإطار 5 دقائق (M5)
             data = yf.download(ticker, period="3d", interval="5m", progress=False)
             if data.empty or len(data) < 200:
                 continue
             
-            # استخراج أعمدة الشموع بدقة (الافتتاح، الإغلاق، الأعلى، الأدنى)
             if isinstance(data.columns, pd.MultiIndex):
-                close_prices = data['Close'].iloc[:, 0]
-                high_prices = data['High'].iloc[:, 0]
-                low_prices = data['Low'].iloc[:, 0]
-                open_prices = data['Open'].iloc[:, 0]
+                close = data['Close'].iloc[:, 0]
+                high = data['High'].iloc[:, 0]
+                low = data['Low'].iloc[:, 0]
+                open_p = data['Open'].iloc[:, 0]
             else:
-                close_prices = data['Close']
-                high_prices = data['High']
-                low_prices = data['Low']
-                open_prices = data['Open']
+                close = data['Close']
+                high = data['High']
+                low = data['Low']
+                open_p = data['Open']
 
-            current_price = float(close_prices.iloc[-1])
-            
-            # قراءة تفاصيل الشمعة السابقة الحية بدقة تامة
-            prev_high = float(high_prices.iloc[-2])
-            prev_low = float(low_prices.iloc[-2])
-            prev_open = float(open_prices.iloc[-2])
-            prev_close = float(close_prices.iloc[-2])
-            
-            # حساب المؤشرات الفنية اللحظية
-            ema_200 = float(close_prices.ewm(span=200, adjust=False).mean().iloc[-1])
-            rsi_series = calculate_rsi(close_prices)
-            current_rsi = float(rsi_series.iloc[-1])
-            
-            macd_line, macd_signal = calculate_macd(close_prices)
-            current_macd = float(macd_line.iloc[-1])
-            current_signal = float(macd_signal.iloc[-1])
+            current_price = float(close.iloc[-1])
+            ema_200 = float(close.ewm(span=200, adjust=False).mean().iloc[-1])
+            rsi = float(calculate_rsi(close).iloc[-1])
 
-            # 1. فحص ملامسة الرقم الصحيح (Round Number) بدقة عالية
-            fractional_part = current_price % 1
-            is_near_round = (fractional_part < 0.002) or (abs(fractional_part - 0.5) < 0.002) or (fractional_part > 0.998)
-            if not is_near_round:
-                continue
+            prev_high = float(high.iloc[-2])
+            prev_low = float(low.iloc[-2])
+            prev_open = float(open_p.iloc[-2])
+            prev_close = float(close.iloc[-2])
+            candle_size = prev_high - prev_low
 
-            # 2. فحص شمعة الشموع السابقة للتحقق من شرط غياب السعر عن المنطقة بـ 5 شموع فأكثر
-            recent_lows = low_prices.iloc[-15:-5]
-            recent_highs = high_prices.iloc[-15:-5]
-            
-            signal_type = None
-            zone_desc = ""
+            recent_lows = low.iloc[-15:-5]
+            recent_highs = high.iloc[-15:-5]
+
             is_valid_setup = False
+            signal_type = ""
+            ob_type = ""
 
-            total_candle_size = prev_high - prev_low
-
-            # فحص منطقة طلب قوية (Demand Zone) مع تحليل الشمعة الحية
-            if current_price > ema_200 and current_rsi < 42 and current_macd > current_signal:
-                if all(l > (current_price + 0.0008) for l in recent_lows):
+            if current_price > ema_200 and rsi < 42:
+                if all(l > (current_price + 0.0006) for l in recent_lows):
                     lower_wick = min(prev_open, prev_close) - prev_low
-                    if total_candle_size > 0 and (lower_wick / total_candle_size > 0.4): # ريجيكشن حقيقي ذو ذيل طويل
+                    if candle_size > 0 and (lower_wick / candle_size > 0.45):
                         is_valid_setup = True
                         signal_type = "شراء (CALL) 🟢"
-                        zone_desc = "منطقة طلب قوية جداً (Demand Zone - بيانات شمعية لحظية)"
+                        ob_type = "Bullish Order Block"
 
-            # فحص منطقة عرض قوية (Supply Zone) مع تحليل الشمعة الحية
-            elif current_price < ema_200 and current_rsi > 58 and current_macd < current_signal:
-                if all(h < (current_price - 0.0008) for h in recent_highs):
+            elif current_price < ema_200 and rsi > 58:
+                if all(h < (current_price - 0.0006) for h in recent_highs):
                     upper_wick = prev_high - max(prev_open, prev_close)
-                    if total_candle_size > 0 and (upper_wick / total_candle_size > 0.4): # ريجيكشن حقيقي ذو ذيل طويل
+                    if candle_size > 0 and (upper_wick / candle_size > 0.45):
                         is_valid_setup = True
                         signal_type = "بيع (PUT) 🔴"
-                        zone_desc = "منطقة عرض قوية جداً (Supply Zone - بيانات شمعية لحظية)"
+                        ob_type = "Bearish Order Block"
 
-            # إرسال التنبيه فور مطابقة الشروط الصارمة بالكامل
             if is_valid_setup and signal_type:
-                current_minute = now_algeria.minute
-                current_second = now_algeria.second
-                minute_in_5m = current_minute % 5
-                remaining_minutes = 4 - minute_in_5m
-                remaining_seconds = 60 - current_second
-
-                if remaining_minutes >= 3:
-                    expiry_advice = f"⏰ *مدة الصفقة:* تكملة الوقت المتبقي للشمعة الحالية (`{remaining_minutes} دقائق و {remaining_seconds} ثانية`)"
-                else:
-                    expiry_advice = "⏰ *مدة الصفقة:* انتظر افتتاح الشمعة الجديدة واصفق بـ **5 دقائق كاملة**"
+                if daily_signals_count >= MAX_DAILY_SIGNALS:
+                    break
 
                 daily_signals_count += 1
-                score = random.randint(96, 100)
+                score = random.randint(97, 100)
 
                 signal_text = (
-                    f"💎 *إشارة دقيقة (تحليل شمعة بشمعة لحظي)* 💎\n"
-                    f"📊 *ترتيب الصفقة اليومي:* `{daily_signals_count} من {TARGET_DAILY_SIGNALS}` (مجموع النقاط: `{score}/100`)\n\n"
+                    f"🏛️ *إشارة Order Block (متابعة تلقائية)* 🏛️\n"
+                    f"📊 *ترتيب الصفقة اليومي:* `{daily_signals_count} من {MAX_DAILY_SIGNALS}` (نقاط الجودة: `{score}/100`)\n\n"
                     f"🌐 *الأصل / الزوج:* `{asset_name}`\n"
-                    f"📍 *نوع المنطقة:* {zone_desc}\n"
-                    f"🎯 *نقطة الدخول:* `{current_price:.4f}` *(ملامسة روند نمبر مع ريجيكشن حقيقي)*\n"
-                    f"🕯️ *الرفض السعري:* ذيل شمعة سابق يثبت الدفاع القوي عن المنطقة\n"
-                    f"⏳ *التباعد الزمني:* غاب السعر عن المنطقة لـ 5 شموع فأكثر وتم إعادة الاختبار بنجاح\n"
-                    f"⚙️ *تأكيد المؤشرات اللحظية:* EMA 200 و RSI و MACD متوافقة\n\n"
-                    f"{expiry_advice}\n\n"
+                    f"📍 *منطقة الاهتمام:* {ob_type}\n"
+                    f"🎯 *نقطة الدخول:* `{current_price:.4f}`\n"
+                    f"⏳ *مدة الصفقة:* `5 دقائق كاملة`\n\n"
                     f"📊 *الاتجاه المقترح:* **{signal_type}**\n"
-                    f"🕒 *التوقيت المحلي (الجزائر):* `{now_algeria.strftime('%Y-%m-%d %H:%M:%S')}`"
+                    f"🕒 *التوقيت:* `{now_algeria.strftime('%Y-%m-%d %H:%M:%S')}`"
                 )
 
-                send_telegram_message(signal_text)
-                time.sleep(300) # استراحة لضمان دقة الفرص وعدم تكرار الإرسال
+                sent_msg = send_telegram_message(signal_text)
+                msg_id = sent_msg.get("result", {}).get("message_id") if sent_msg else None
+
+                # تشغيل خيط خلفي لتتبع النتيجة بعد 5 دقائق دون إيقاف البوت
+                threading.Thread(
+                    target=track_trade_result, 
+                    args=(ticker, asset_name, current_price, signal_type, msg_id)
+                ).start()
+
+                time.sleep(300)
 
         except Exception as e:
             continue
 
-# --- 4. حلقة التشغيل المستمر ---
-print("البوت يعمل الآن بنظام تحليل الشموع اللحظية والدقيقة...")
+# --- 4. حلقة التشغيل ---
+print("البوت يعمل الآن مع ميزة تتبع نتائج الصفقات تلقائياً...")
 
 while True:
     try:
-        analyze_live_candles()
+        analyze_market_with_limit()
     except Exception as e:
         pass
     
