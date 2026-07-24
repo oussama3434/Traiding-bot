@@ -268,7 +268,7 @@ def fetch_mt5_data(symbol, timeframe, n_bars=300):
     df['time'] = pd.to_datetime(df['time'], unit='s')
     return df
 
-dedef run_bot():
+def run_bot():
     if not mt5.initialize():
         print("MT5 Initialization failed")
         mt5.shutdown()
