@@ -17,7 +17,7 @@ FOREX_PAIRS = [
 ]
 
 # الحد الأدنى للنقاط لإرسال الإشارة
-MIN_SCORE_REQUIRED = 90
+MIN_SCORE_REQUIRED = 85
 # --- telegram.py ---
 import requests
 from config import BOT_TOKEN, CHAT_ID
@@ -66,9 +66,7 @@ def detect_order_blocks(df):
         body_size = abs(df['close'].iloc[i] - df['open'].iloc[i])
         prev_body = abs(df['close'].iloc[i-1] - df['open'].iloc[i-1])
         
-        # حركة اندفاعية قوية (Impulse Move)
         if body_size > (prev_body * 1.5):
-            # صعود قوي -> البحث عن آخر شمعة هابطة (Bullish OB)
             if df['close'].iloc[i] > df['open'].iloc[i]:
                 for j in range(i-1, max(0, i-4), -1):
                     if df['close'].iloc[j] < df['open'].iloc[j]:
@@ -80,7 +78,6 @@ def detect_order_blocks(df):
                             'tested': False
                         })
                         break
-            # هبوط قوي -> البحث عن آخر شمعة صاعدة (Bearish OB)
             elif df['close'].iloc[i] < df['open'].iloc[i]:
                 for j in range(i-1, max(0, i-4), -1):
                     if df['close'].iloc[j] > df['open'].iloc[j]:
@@ -138,64 +135,74 @@ def check_rejection_candle(df):
     lower_wick = min(prev_open, prev_close) - prev_low
     upper_wick = prev_high - max(prev_open, prev_close)
     
-    if (lower_wick / candle_size >= 0.5) or (upper_wick / candle_size >= 0.5):
+    if (lower_wick / candle_size >= 0.4) or (upper_wick / candle_size >= 0.4):
+        return True
+    return False
+# --- liquidity.py ---
+def check_liquidity_sweep(df, direction):
+    recent_data = df.iloc[-15:-2]
+    if direction == 'BULLISH':
+        min_low = recent_data['low'].min()
+        if df['low'].iloc[-2] < min_low and df['close'].iloc[-2] > min_low:
+            return True
+    else:
+        max_high = recent_data['high'].max()
+        if df['high'].iloc[-2] > max_high and df['close'].iloc[-2] < max_high:
+            return True
+    return False
+
+def check_rejection_candle(df):
+    prev_open = df['open'].iloc[-2]
+    prev_close = df['close'].iloc[-2]
+    prev_high = df['high'].iloc[-2]
+    prev_low = df['low'].iloc[-2]
+    candle_size = prev_high - prev_low
+    
+    if candle_size == 0:
+        return False
+        
+    lower_wick = min(prev_open, prev_close) - prev_low
+    upper_wick = prev_high - max(prev_open, prev_close)
+    
+    if (lower_wick / candle_size >= 0.4) or (upper_wick / candle_size >= 0.4):
         return True
     return False
 # --- filters.py ---
-from indicators import calculate_ema, calculate_rsi, calculate_macd, calculate_atr
+from indicators import calculate_ema, calculate_rsi, calculate_macd
 from liquidity import check_liquidity_sweep, check_rejection_candle
 
 def evaluate_setup(df_m5, df_m15, ob, fvg):
     score = 0
     breakdown = []
 
-    # 1. Order Block (30 pts)
     if ob:
-        score += 30
-        breakdown.append("Order Block (+30)")
+        score += 35
+        breakdown.append("Order Block الملامس (+35)")
 
-    # 2. FVG (20 pts)
     if fvg:
-        score += 20
-        breakdown.append("FVG (+20)")
-
-    # 3. غياب السعر عن المنطقة 7 شموع على الأقل (15 pts)
-    ob_high, ob_low = ob['high'], ob['low']
-    untouched_candles = sum(1 for i in range(-15, -2) if df_m5['high'].iloc[i] < ob_low or df_m5['low'].iloc[i] > ob_high)
-    if untouched_candles >= 7:
         score += 15
-        breakdown.append("غياب السعر 7+ شموع (+15)")
+        breakdown.append("FVG توافق (+15)")
 
     direction = 'BULLISH' if 'BULLISH' in ob['type'] else 'BEARISH'
 
-    # 4. Liquidity Sweep (10 pts)
     if check_liquidity_sweep(df_m5, direction):
-        score += 10
-        breakdown.append("Liquidity Sweep (+10)")
+        score += 15
+        breakdown.append("Liquidity Sweep (+15)")
 
-    # 5. Reject Candle (10 pts)
     if check_rejection_candle(df_m5):
-        score += 10
-        breakdown.append("Reject Candle (+10)")
+        score += 15
+        breakdown.append("Reject Candle (+15)")
 
-    # 6. Trend Filter EMA 200 on M15 (5 pts)
     m15_ema = calculate_ema(df_m15['close'], 200).iloc[-1]
     m15_close = df_m15['close'].iloc[-1]
     if (direction == 'BULLISH' and m15_close > m15_ema) or (direction == 'BEARISH' and m15_close < m15_ema):
-        score += 5
-        breakdown.append("EMA200 M15 (+5)")
+        score += 10
+        breakdown.append("EMA200 Trend (+10)")
 
-    # 7. RSI Filter (5 pts)
-    rsi = calculate_rsi(df_m5['close']).iloc[-2]
-    if (direction == 'BULLISH' and rsi < 35) or (direction == 'BEARISH' and rsi > 65):
-        score += 5
-        breakdown.append("RSI Filter (+5)")
-
-    # 8. MACD Filter (5 pts)
     _, _, hist = calculate_macd(df_m5['close'])
     if (direction == 'BULLISH' and hist.iloc[-2] > 0) or (direction == 'BEARISH' and hist.iloc[-2] < 0):
-        score += 5
-        breakdown.append("MACD Filter (+5)")
+        score += 10
+        breakdown.append("MACD Momentum (+10)")
 
     return score, direction, breakdown
 # --- strategy.py ---
@@ -207,20 +214,28 @@ def analyze_market(df_m5, df_m15):
     obs = detect_order_blocks(df_m5)
     fvgs = detect_fvg(df_m5)
     
-    if not obs or not fvgs:
+    if not obs:
         return None
         
     latest_ob = obs[-1]
     
-    # التأكد من أنها أول إعادة اختبار فقط (First Test Only)
     if latest_ob.get('tested', False):
         return None
         
-    latest_fvg = fvgs[-1]
+    current_close = df_m5['close'].iloc[-2]
+    current_low = df_m5['low'].iloc[-2]
+    current_high = df_m5['high'].iloc[-2]
+    
+    is_bullish_test = ('BULLISH' in latest_ob['type']) and (current_low <= latest_ob['high'] and current_close >= latest_ob['low'])
+    is_bearish_test = ('BEARISH' in latest_ob['type']) and (current_high >= latest_ob['low'] and current_close <= latest_ob['high'])
+    
+    if not (is_bullish_test or is_bearish_test):
+        return None
+        
+    latest_fvg = fvgs[-1] if fvgs else None
     
     score, direction, breakdown = evaluate_setup(df_m5, df_m15, latest_ob, latest_fvg)
     
-    # تعليم الطقة بأنه تم اختبارها لتجنب التكرار
     latest_ob['tested'] = True
     
     return {
@@ -228,7 +243,7 @@ def analyze_market(df_m5, df_m15):
         'direction': direction,
         'breakdown': ", ".join(breakdown)
     }
-# --- bot.py ---
+# --- main.py ---
 import os
 import time
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -242,12 +257,11 @@ from config import FOREX_PAIRS, START_HOUR, END_HOUR, ALLOWED_DAYS, MIN_SCORE_RE
 from strategy import analyze_market
 from telegram import send_telegram_message
 
-# خادم الويب لبقاء البوت نشطاً على المنصات السحابية
 class SimpleHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.end_headers()
-        self.wfile.write(b"SMC Forex Bot is active and running!")
+        self.wfile.write(b"SMC Forex Bot is active and running perfectly!")
     def log_message(self, format, *args):
         return
 
@@ -274,17 +288,16 @@ def run_bot():
         mt5.shutdown()
         return
 
-    print("Professional SMC Forex Bot is running...")
+    print("Professional SMC Forex Bot is running with strict filters...")
     last_signal_time = {}
 
     while True:
         algeria_tz = pytz.timezone("Africa/Algiers")
         now = datetime.now(algeria_tz)
         
-        # الشرط الحاسم: إذا كان اليوم عطلة (السبت/الأحدا) أو الوقت خارج الفترة المحددة، يتوقف تماماً ولا يفعل شيئاً
         if now.weekday() not in ALLOWED_DAYS or not (START_HOUR <= now.hour < END_HOUR):
             print(f"[{now.strftime('%H:%M:%S')}] السوق مغلق أو خارج أوقات العمل (11:00 - 20:00). البوت في وضع الاسترخاء...")
-            time.sleep(300)  # ينتظر 5 دقائق ثم يعود للفحص بهدوء دون إزعاج
+            time.sleep(300)
             continue
             
         for symbol in FOREX_PAIRS:
@@ -304,7 +317,7 @@ def run_bot():
                 direction_str = "CALL (شراء) 🟢" if result['direction'] == 'BULLISH' else "PUT (بيع) 🔴"
                 
                 message = (
-                    f"💎 *إشارة تداول SMC احترافية (فوركس)* 💎\n\n"
+                    f"💎 *إشارة تداول SMC دقيقة (فوركس)* 💎\n\n"
                     f"🌐 *الزوج:* `{symbol}`\n"
                     f"📊 *الاتجاه:* **{direction_str}**\n"
                     f"⭐ *درجة القوة:* `{result['score']}/100`\n"
@@ -317,3 +330,5 @@ def run_bot():
                 
         time.sleep(60)
 
+if __name__ == "__main__":
+    run_bot()
