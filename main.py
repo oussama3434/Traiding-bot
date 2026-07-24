@@ -493,24 +493,45 @@ def detect_fvg(df):
             # Bearish FVG
 
             if c1["low"] > c3["high"]:
+# ==========================================
+# Real Fair Value Gap Detection
+# ==========================================
 
-         # Bearish FVG
-        if c1["low"] > c3["high"]:
+def detect_fvg(df):
+    try:
+        c1 = df.iloc[-3]
+        c2 = df.iloc[-2]
+        c3 = df.iloc[-1]
 
-            gap = c1["low"] - c3["high"]
+        atr = df["ATR"].iloc[-1]
+        if pd.isna(atr):
+            return None
 
+        minimum_gap = atr * 0.25
+
+        if c1["high"] < c3["low"]:
+            gap = c3["low"] - c1["high"]
             if gap >= minimum_gap:
+                return {
+                    "direction": "BUY",
+                    "top": c3["low"],
+                    "bottom": c1["high"]
+                }
 
+        if c1["low"] > c3["high"]:
+            gap = c1["low"] - c3["high"]
+            if gap >= minimum_gap:
                 return {
                     "direction": "SELL",
                     "top": c1["low"],
                     "bottom": c3["high"]
                 }
-   
-# Rejection Confirmation
-# ==========================================
 
-def rejection_confirm(df, direction):
+        return None
+    except Exception as e:
+        error(f"FVG: {e}")
+        return None
+
 
     try:
 
