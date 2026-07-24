@@ -1,334 +1,405 @@
-# --- config.py ---
+requests
+pandas
+numpy
+pytz
+yfinance
+python-dotenv
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Telegram Settings
-BOT_TOKEN = "8250531737:AAGyXgGThfPV-7UmA_skpmP4J6de-eOe7rk"
-CHAT_ID = "-1004367810810"
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+CHAT_ID = os.getenv("CHAT_ID")
 
-# Time & Trading Rules
-TIMEZONE = "Africa/Algiers"
+# Time Settings
+TIMEZONE = os.getenv("TIMEZONE", "Africa/Algiers")
 START_HOUR = 11
 END_HOUR = 20
-ALLOWED_DAYS = [0, 1, 2, 3, 4]  # من الإثنين إلى الجمعة
 
-# Forex Pairs (استبعاد الذهب XAUUSD)
-FOREX_PAIRS = [
-    "EURUSD", "GBPUSD", "USDJPY", "AUDUSD", 
-    "USDCAD", "NZDUSD", "EURGBP", "EURJPY", "GBPJPY"
+# Trading Settings
+TIMEFRAME = "5m"
+MAX_SIGNALS_PER_DAY = 15
+USE_GOLD = False
+
+# Strategy Settings
+RSI_PERIOD = 14
+RSI_OVERSOLD = 30
+RSI_OVERBOUGHT = 70
+
+MACD_FAST = 12
+MACD_SLOW = 26
+MACD_SIGNAL = 9
+
+MIN_ZONE_GAP_CANDLES = 7
+MAX_CONSOLIDATION_CANDLES = 4
+
+# Forex Pairs
+PAIRS = [
+    "EUR/USD",
+    "GBP/USD",
+    "USD/JPY",
+    "AUD/USD",
+    "USD/CAD",
+    "EUR/GBP",
+    "NZD/USD"
 ]
 
-# الحد الأدنى للنقاط لإرسال الإشارة
-MIN_SCORE_REQUIRED = 85
-# --- telegram.py ---
-import requests
-from config import BOT_TOKEN, CHAT_ID
-
-def send_telegram_message(message):
-    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
-    try:
-        response = requests.post(url, json=payload, timeout=10)
-        return response.json()
-    except Exception as e:
-        print(f"Telegram Error: {e}")
-        return None
-# --- indicators.py ---
-import pandas as pd
-
-def calculate_ema(series, period=200):
-    return series.ewm(span=period, adjust=False).mean()
-
-def calculate_rsi(series, period=14):
-    delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
-
-def calculate_macd(series, fast=12, slow=26, signal=9):
-    exp1 = series.ewm(span=fast, adjust=False).mean()
-    exp2 = series.ewm(span=slow, adjust=False).mean()
-    macd_line = exp1 - exp2
-    signal_line = macd_line.ewm(span=signal, adjust=False).mean()
-    histogram = macd_line - signal_line
-    return macd_line, signal_line, histogram
-
-def calculate_atr(df, period=14):
-    high_low = df['high'] - df['low']
-    high_close = (df['high'] - df['close'].shift()).abs()
-    low_close = (df['low'] - df['close'].shift()).abs()
-    ranges = pd.concat([high_low, high_close, low_close], axis=1)
-    true_range = ranges.max(axis=1)
-    return true_range.rolling(window=period).mean()
-# --- orderblock.py ---
-def detect_order_blocks(df):
-    ob_list = []
-    for i in range(3, len(df) - 1):
-        body_size = abs(df['close'].iloc[i] - df['open'].iloc[i])
-        prev_body = abs(df['close'].iloc[i-1] - df['open'].iloc[i-1])
-        
-        if body_size > (prev_body * 1.5):
-            if df['close'].iloc[i] > df['open'].iloc[i]:
-                for j in range(i-1, max(0, i-4), -1):
-                    if df['close'].iloc[j] < df['open'].iloc[j]:
-                        ob_list.append({
-                            'index': j,
-                            'type': 'BULLISH_OB',
-                            'high': df['high'].iloc[j],
-                            'low': df['low'].iloc[j],
-                            'tested': False
-                        })
-                        break
-            elif df['close'].iloc[i] < df['open'].iloc[i]:
-                for j in range(i-1, max(0, i-4), -1):
-                    if df['close'].iloc[j] > df['open'].iloc[j]:
-                        ob_list.append({
-                            'index': j,
-                            'type': 'BEARISH_OB',
-                            'high': df['high'].iloc[j],
-                            'low': df['low'].iloc[j],
-                            'tested': False
-                        })
-                        break
-    return ob_list
-# --- fvg.py ---
-def detect_fvg(df):
-    fvg_list = []
-    for i in range(2, len(df)):
-        if df['low'].iloc[i] > df['high'].iloc[i-2]:
-            fvg_list.append({
-                'index': i,
-                'type': 'BULLISH_FVG',
-                'top': df['low'].iloc[i],
-                'bottom': df['high'].iloc[i-2]
-            })
-        elif df['high'].iloc[i] < df['low'].iloc[i-2]:
-            fvg_list.append({
-                'index': i,
-                'type': 'BEARISH_FVG',
-                'top': df['low'].iloc[i-2],
-                'bottom': df['high'].iloc[i]
-            })
-    return fvg_list
-# --- liquidity.py ---
-def check_liquidity_sweep(df, direction):
-    recent_data = df.iloc[-15:-2]
-    if direction == 'BULLISH':
-        min_low = recent_data['low'].min()
-        if df['low'].iloc[-2] < min_low and df['close'].iloc[-2] > min_low:
-            return True
-    else:
-        max_high = recent_data['high'].max()
-        if df['high'].iloc[-2] > max_high and df['close'].iloc[-2] < max_high:
-            return True
-    return False
-
-def check_rejection_candle(df):
-    prev_open = df['open'].iloc[-2]
-    prev_close = df['close'].iloc[-2]
-    prev_high = df['high'].iloc[-2]
-    prev_low = df['low'].iloc[-2]
-    candle_size = prev_high - prev_low
-    
-    if candle_size == 0:
-        return False
-        
-    lower_wick = min(prev_open, prev_close) - prev_low
-    upper_wick = prev_high - max(prev_open, prev_close)
-    
-    if (lower_wick / candle_size >= 0.4) or (upper_wick / candle_size >= 0.4):
-        return True
-    return False
-# --- liquidity.py ---
-def check_liquidity_sweep(df, direction):
-    recent_data = df.iloc[-15:-2]
-    if direction == 'BULLISH':
-        min_low = recent_data['low'].min()
-        if df['low'].iloc[-2] < min_low and df['close'].iloc[-2] > min_low:
-            return True
-    else:
-        max_high = recent_data['high'].max()
-        if df['high'].iloc[-2] > max_high and df['close'].iloc[-2] < max_high:
-            return True
-    return False
-
-def check_rejection_candle(df):
-    prev_open = df['open'].iloc[-2]
-    prev_close = df['close'].iloc[-2]
-    prev_high = df['high'].iloc[-2]
-    prev_low = df['low'].iloc[-2]
-    candle_size = prev_high - prev_low
-    
-    if candle_size == 0:
-        return False
-        
-    lower_wick = min(prev_open, prev_close) - prev_low
-    upper_wick = prev_high - max(prev_open, prev_close)
-    
-    if (lower_wick / candle_size >= 0.4) or (upper_wick / candle_size >= 0.4):
-        return True
-    return False
-# --- filters.py ---
-from indicators import calculate_ema, calculate_rsi, calculate_macd
-from liquidity import check_liquidity_sweep, check_rejection_candle
-
-def evaluate_setup(df_m5, df_m15, ob, fvg):
-    score = 0
-    breakdown = []
-
-    if ob:
-        score += 35
-        breakdown.append("Order Block الملامس (+35)")
-
-    if fvg:
-        score += 15
-        breakdown.append("FVG توافق (+15)")
-
-    direction = 'BULLISH' if 'BULLISH' in ob['type'] else 'BEARISH'
-
-    if check_liquidity_sweep(df_m5, direction):
-        score += 15
-        breakdown.append("Liquidity Sweep (+15)")
-
-    if check_rejection_candle(df_m5):
-        score += 15
-        breakdown.append("Reject Candle (+15)")
-
-    m15_ema = calculate_ema(df_m15['close'], 200).iloc[-1]
-    m15_close = df_m15['close'].iloc[-1]
-    if (direction == 'BULLISH' and m15_close > m15_ema) or (direction == 'BEARISH' and m15_close < m15_ema):
-        score += 10
-        breakdown.append("EMA200 Trend (+10)")
-
-    _, _, hist = calculate_macd(df_m5['close'])
-    if (direction == 'BULLISH' and hist.iloc[-2] > 0) or (direction == 'BEARISH' and hist.iloc[-2] < 0):
-        score += 10
-        breakdown.append("MACD Momentum (+10)")
-
-    return score, direction, breakdown
-# --- strategy.py ---
-from orderblock import detect_order_blocks
-from fvg import detect_fvg
-from filters import evaluate_setup
-
-def analyze_market(df_m5, df_m15):
-    obs = detect_order_blocks(df_m5)
-    fvgs = detect_fvg(df_m5)
-    
-    if not obs:
-        return None
-        
-    latest_ob = obs[-1]
-    
-    if latest_ob.get('tested', False):
-        return None
-        
-    current_close = df_m5['close'].iloc[-2]
-    current_low = df_m5['low'].iloc[-2]
-    current_high = df_m5['high'].iloc[-2]
-    
-    is_bullish_test = ('BULLISH' in latest_ob['type']) and (current_low <= latest_ob['high'] and current_close >= latest_ob['low'])
-    is_bearish_test = ('BEARISH' in latest_ob['type']) and (current_high >= latest_ob['low'] and current_close <= latest_ob['high'])
-    
-    if not (is_bullish_test or is_bearish_test):
-        return None
-        
-    latest_fvg = fvgs[-1] if fvgs else None
-    
-    score, direction, breakdown = evaluate_setup(df_m5, df_m15, latest_ob, latest_fvg)
-    
-    latest_ob['tested'] = True
-    
-    return {
-        'score': score,
-        'direction': direction,
-        'breakdown': ", ".join(breakdown)
-    }
-# --- main.py ---
+# Rules
+SEND_SIGNALS = True
+NO_MARTINGALE = True
+WAIT_CONFIRMATION_CANDLE = True
+USE_ORDER_BLOCK = True
+USE_FVG = True
+import logging
 import os
-import time
-from http.server import HTTPServer, BaseHTTPRequestHandler
-import threading
+from datetime import datetime
+
+LOG_FOLDER = "logs"
+if not os.path.exists(LOG_FOLDER):
+    os.makedirs(LOG_FOLDER)
+
+LOG_FILE = os.path.join(
+    LOG_FOLDER,
+    f"bot_{datetime.now().strftime('%Y-%m-%d')}.log"
+)
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s",
+    handlers=[
+        logging.FileHandler(LOG_FILE, encoding="utf-8"),
+        logging.StreamHandler()
+    ]
+)
+
+def info(message):
+    logging.info(message)
+
+def warning(message):
+    logging.warning(message)
+
+def error(message):
+    logging.error(message)
+
+def debug(message):
+    logging.debug(message)
+import yfinance as yf
+import pandas as pd
+from logger import info, error
+
+def convert_symbol(symbol):
+    return symbol.replace("/", "") + "=X"
+
+def get_candles(symbol, timeframe="5m", limit=200):
+    try:
+        yahoo_symbol = convert_symbol(symbol)
+        data = yf.download(
+            yahoo_symbol,
+            interval=timeframe,
+            period="5d",
+            progress=False
+        )
+
+        if data.empty:
+            error(f"No data: {symbol}")
+            return None
+
+        data = data.tail(limit)
+        data.reset_index(inplace=True)
+        
+        if isinstance(data.columns, pd.MultiIndex):
+            data.columns = [col[0].lower() for col in data.columns]
+        else:
+            data.columns = [col.lower() for col in data.columns]
+
+        required_cols = ["open", "high", "low", "close", "volume"]
+        for col in required_cols:
+            if col not in data.columns:
+                error(f"Missing column {col} in data for {symbol}")
+                return None
+
+        data = data[required_cols]
+        info(f"Loaded {symbol}")
+        return data
+
+    except Exception as e:
+        error(f"Data error {symbol}: {e}")
+        return None
+import pandas as pd
+from logger import error
+
+def calculate_rsi(df, period=14):
+    try:
+        delta = df["close"].diff()
+        gain = delta.where(delta > 0, 0)
+        loss = -delta.where(delta < 0, 0)
+
+        avg_gain = gain.rolling(period).mean()
+        avg_loss = loss.rolling(period).mean()
+
+        rs = avg_gain / avg_loss
+        rsi = 100 - (100 / (1 + rs))
+        df["RSI"] = rsi
+        return df
+    except Exception as e:
+        error(f"RSI error: {e}")
+        return df
+
+def calculate_macd(df, fast=12, slow=26, signal=9):
+    try:
+        ema_fast = df["close"].ewm(span=fast, adjust=False).mean()
+        ema_slow = df["close"].ewm(span=slow, adjust=False).mean()
+
+        df["MACD"] = ema_fast - ema_slow
+        df["MACD_SIGNAL"] = df["MACD"].ewm(span=signal, adjust=False).mean()
+        df["MACD_HIST"] = df["MACD"] - df["MACD_SIGNAL"]
+        return df
+    except Exception as e:
+        error(f"MACD error: {e}")
+        return df
+
+def apply_indicators(df):
+    df = calculate_rsi(df)
+    df = calculate_macd(df)
+    return df
+from config import (
+    MIN_ZONE_GAP_CANDLES,
+    MAX_CONSOLIDATION_CANDLES,
+    RSI_OVERSOLD,
+    RSI_OVERBOUGHT
+)
+from indicators import apply_indicators
+from logger import info, error
+
+def is_consolidation(df):
+    try:
+        candles = df.tail(MAX_CONSOLIDATION_CANDLES)
+        high = candles["high"].max()
+        low = candles["low"].min()
+        spread = high - low
+        average_price = candles["close"].mean()
+        return spread < average_price * 0.002
+    except Exception as e:
+        error(f"Consolidation check: {e}")
+        return True
+
+def detect_order_block(df):
+    try:
+        previous = df.iloc[-3]
+        current = df.iloc[-1]
+
+        if previous["close"] < previous["open"] and current["close"] > current["open"]:
+            return "BUY"
+        if previous["close"] > previous["open"] and current["close"] < current["open"]:
+            return "SELL"
+        return None
+    except:
+        return None
+
+def detect_fvg(df):
+    try:
+        c1 = df.iloc[-3]
+        c3 = df.iloc[-1]
+        if c1["high"] < c3["low"]:
+            return "BUY"
+        if c1["low"] > c3["high"]:
+            return "SELL"
+        return None
+    except:
+        return None
+
+def price_left_zone(df):
+    return len(df) >= MIN_ZONE_GAP_CANDLES
+
+def rejection_confirm(df, direction):
+    try:
+        candle = df.iloc[-1]
+        body = abs(candle["close"] - candle["open"])
+        if body == 0:
+            return False
+
+        upper_wick = candle["high"] - max(candle["open"], candle["close"])
+        lower_wick = min(candle["open"], candle["close"]) - candle["low"]
+
+        if direction == "BUY":
+            return lower_wick > body * 1.5
+        if direction == "SELL":
+            return upper_wick > body * 1.5
+        return False
+    except:
+        return False
+
+def generate_signal(df):
+    try:
+        df = apply_indicators(df)
+        if is_consolidation(df) or not price_left_zone(df):
+            return None
+
+        ob = detect_order_block(df)
+        fvg = detect_fvg(df)
+
+        if not ob or not fvg or ob != fvg:
+            return None
+
+        direction = ob
+        if not rejection_confirm(df, direction):
+            return None
+
+        last = df.iloc[-1]
+        rsi = last["RSI"]
+        macd = last["MACD_HIST"]
+
+        if direction == "BUY" and rsi < RSI_OVERBOUGHT and macd > 0:
+            info("Strong BUY setup")
+            return "BUY"
+
+        if direction == "SELL" and rsi > RSI_OVERSOLD and macd < 0:
+            info("Strong SELL setup")
+            return "SELL"
+
+        return None
+    except Exception as e:
+        error(f"Strategy error: {e}")
+        return None
+import requests
 from datetime import datetime
 import pytz
-import pandas as pd
-import MetaTrader5 as mt5
+from config import BOT_TOKEN, CHAT_ID, TIMEZONE
+from logger import info, error
 
-from config import FOREX_PAIRS, START_HOUR, END_HOUR, ALLOWED_DAYS, MIN_SCORE_REQUIRED
-from strategy import analyze_market
-from telegram import send_telegram_message
+def send_message(message):
+    try:
+        url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+        data = {
+            "chat_id": CHAT_ID,
+            "text": message,
+            "parse_mode": "HTML"
+        }
+        response = requests.post(url, data=data, timeout=10)
+        if response.status_code == 200:
+            info("Telegram message sent")
+            return True
+        else:
+            error(f"Telegram error: {response.text}")
+            return False
+    except Exception as e:
+        error(f"Telegram exception: {e}")
+        return False
 
-class SimpleHandler(BaseHTTPRequestHandler):
-    def do_GET(self):
-        self.send_response(200)
-        self.end_headers()
-        self.wfile.write(b"SMC Forex Bot is active and running perfectly!")
-    def log_message(self, format, *args):
-        return
+def send_signal(pair, direction):
+    emoji = "🟢" if direction == "BUY" else "🔴"
+    current_time = datetime.now(pytz.timezone(TIMEZONE)).strftime("%Y-%m-%d %H:%M:%S")
 
-def run_server():
-    port = int(os.environ.get("PORT", 10000))
-    server = HTTPServer(('0.0.0.0', port), SimpleHandler)
-    server.serve_forever()
+    message = f"""
+{emoji} <b>Trading Signal</b>
 
-server_thread = threading.Thread(target=run_server)
-server_thread.daemon = True
-server_thread.start()
+📊 Pair: {pair}
+⏱ Timeframe: 5 Minutes
+📈 Direction: {direction}
+🕒 Time: {current_time}
 
-def fetch_mt5_data(symbol, timeframe, n_bars=300):
-    rates = mt5.copy_rates_from_pos(symbol, timeframe, 0, n_bars)
-    if rates is None:
-        return pd.DataFrame()
-    df = pd.DataFrame(rates)
-    df['time'] = pd.to_datetime(df['time'], unit='s')
-    return df
+🧠 Strategy: Order Block + FVG + RSI + MACD
+⚠️ No Martingale
+"""
+    return send_message(message)
+import time
+from datetime import datetime
+import pytz
+from config import TIMEZONE, START_HOUR, END_HOUR, PAIRS, MAX_SIGNALS_PER_DAY
+from data import get_candles
+from strategy import generate_signal
+from telegram_bot import send_signal
+from logger import info, error
+
+signals_today = 0
+last_day = None
+
+def check_time():
+    now = datetime.now(pytz.timezone(TIMEZONE))
+    return START_HOUR <= now.hour <= END_HOUR
+
+def reset_daily_counter():
+    global signals_today, last_day
+    today = datetime.now(pytz.timezone(TIMEZONE)).date()
+    if last_day != today:
+        signals_today = 0
+        last_day = today
 
 def run_bot():
-    if not mt5.initialize():
-        print("MT5 Initialization failed")
-        mt5.shutdown()
-        return
-
-    print("Professional SMC Forex Bot is running with strict filters...")
-    last_signal_time = {}
+    global signals_today
+    info("Trading bot started")
 
     while True:
-        algeria_tz = pytz.timezone("Africa/Algiers")
-        now = datetime.now(algeria_tz)
-        
-        if now.weekday() not in ALLOWED_DAYS or not (START_HOUR <= now.hour < END_HOUR):
-            print(f"[{now.strftime('%H:%M:%S')}] السوق مغلق أو خارج أوقات العمل (11:00 - 20:00). البوت في وضع الاسترخاء...")
-            time.sleep(300)
-            continue
-            
-        for symbol in FOREX_PAIRS:
-            df_m5 = fetch_mt5_data(symbol, mt5.TIMEFRAME_M5, 300)
-            df_m15 = fetch_mt5_data(symbol, mt5.TIMEFRAME_M15, 300)
-            
-            if df_m5.empty or df_m15.empty:
+        try:
+            reset_daily_counter()
+
+            if not check_time():
+                time.sleep(60)
                 continue
-                
-            result = analyze_market(df_m5, df_m15)
-            
-            if result and result['score'] >= MIN_SCORE_REQUIRED:
-                if time.time() - last_signal_time.get(symbol, 0) < 7200:
+
+            if signals_today >= MAX_SIGNALS_PER_DAY:
+                time.sleep(300)
+                continue
+
+            for pair in PAIRS:
+                candles = get_candles(pair)
+                if candles is None:
                     continue
-                last_signal_time[symbol] = time.time()
-                
-                direction_str = "CALL (شراء) 🟢" if result['direction'] == 'BULLISH' else "PUT (بيع) 🔴"
-                
-                message = (
-                    f"💎 *إشارة تداول SMC دقيقة (فوركس)* 💎\n\n"
-                    f"🌐 *الزوج:* `{symbol}`\n"
-                    f"📊 *الاتجاه:* **{direction_str}**\n"
-                    f"⭐ *درجة القوة:* `{result['score']}/100`\n"
-                    f"📌 *أسباب الدخول:* {result['breakdown']}\n"
-                    f"⏱️ *مدة الصفقة:* `5 دقائق كاملة`\n"
-                    f"🕒 *وقت الدخول:* `{now.strftime('%Y-%m-%d %H:%M:%S')}`"
-                )
-                
-                send_telegram_message(message)
-                
-        time.sleep(60)
+
+                signal = generate_signal(candles)
+                if signal:
+                    send_signal(pair, signal)
+                    signals_today += 1
+                    info(f"Signal sent: {pair} {signal}")
+
+                time.sleep(5)
+
+            time.sleep(60)
+
+        except Exception as e:
+            error(f"Main loop error: {e}")
+            time.sleep(60)
 
 if __name__ == "__main__":
     run_bot()
+name: Forex Signal Bot
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "*/5 * * * *"
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install libraries
+        run: |
+          pip install -r requirements.txt
+
+      - name: Run bot
+        env:
+          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          CHAT_ID: ${{ secrets.CHAT_ID }}
+          TIMEZONE: Africa/Algiers
+        run: |
+          python main.py
+__pycache__/
+*.pyc
+*.pyo
+logs/
+*.log
+.env
+venv/
+env/
+.DS_Store
