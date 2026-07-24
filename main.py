@@ -1,372 +1,2095 @@
 # ==========================================
-# Professional SMC Bot
-# main.py
+# market_structure.py
+# Professional SMC Market Structure Engine
 # ==========================================
 
-import time
 import pandas as pd
-from datetime import datetime, timedelta
 
-import pytz
-import requests
 
-from config import (
-    BOT_TOKEN,
-    CHAT_ID,
-    TIMEZONE,
-    START_HOUR,
-    END_HOUR,
-    ALLOWED_DAYS,
-    SYMBOLS,
-    BLOCKED_SYMBOLS,
-    MAX_SIGNALS_PER_DAY,
-    MIN_SIGNAL_INTERVAL
-)
+class MarketStructure:
 
-from strategy import generate_signal
-from logger import info, error
+    def __init__(self, df):
 
+        self.df = df.copy()
 
-# متغير لتخزين وقت آخر إشارة تم إرسالها
-last_signal_time = None
+    # ==========================================
+    # Swing High / Swing Low
+    # ==========================================
 
+    def detect_swings(self, left=3, right=3):
 
-def can_send_signal():
-    """التحقق مما إذا كان الوقت المنقضي يسمح بإرسال إشارة جديدة"""
-    global last_signal_time
-    now = datetime.now()
-    if last_signal_time is None:
-        last_signal_time = now
-        return True
-    if now - last_signal_time >= timedelta(minutes=MIN_SIGNAL_INTERVAL):
-        last_signal_time = now
-        return True
-    return False
+        highs = []
+        lows = []
 
+        for i in range(left, len(self.df)-right):
 
-# ==========================================
-# Telegram Sender
-# ==========================================
+            current_high = self.df.high.iloc[i]
+            current_low = self.df.low.iloc[i]
 
-def send_telegram(message):
+            if current_high >= max(
+                self.df.high.iloc[i-left:i+right+1]
+            ):
 
-    try:
+                highs.append({
+                    "index": i,
+                    "price": current_high
+                })
 
-        url = (
-            f"https://api.telegram.org/"
-            f"bot{BOT_TOKEN}/sendMessage"
-        )
+            if current_low <= min(
+                self.df.low.iloc[i-left:i+right+1]
+            ):
 
+                lows.append({
+                    "index": i,
+                    "price": current_low
+                })
 
-        data = {
+        return highs, lows
 
-            "chat_id": CHAT_ID,
+    # ==========================================
+    # Trend Detection
+    # ==========================================
 
-            "text": message,
+    def trend(self):
 
-            "parse_mode": "HTML"
+        ema20 = self.df.EMA20.iloc[-1]
+        ema50 = self.df.EMA50.iloc[-1]
 
-        }
+        close = self.df.close.iloc[-1]
 
+        if close > ema20 > ema50:
+            return "UP"
 
-        requests.post(
-            url,
-            data=data,
-            timeout=10
-        )
+        if close < ema20 < ema50:
+            return "DOWN"
 
+        return "SIDEWAYS"
 
-    except Exception as e:
+    # ==========================================
+    # Break Of Structure
+    # ==========================================
 
-        error(
-            f"Telegram error: {e}"
-        )
+    def detect_bos(self):
 
+        highs, lows = self.detect_swings()
 
+        if len(highs) < 2 or len(lows) < 2:
+            return None
 
-# ==========================================
-# Time Filter
-# ==========================================
+        last_high = highs[-1]["price"]
+        prev_high = highs[-2]["price"]
 
-def trading_time():
+        last_low = lows[-1]["price"]
+        prev_low = lows[-2]["price"]
 
-    try:
+        if last_high > prev_high:
+            return "BULLISH"
 
-        tz = pytz.timezone(
-            TIMEZONE
-        )
-
-        now = datetime.now(tz)
-
-
-        if now.weekday() not in ALLOWED_DAYS:
-            return False
-
-
-        if (
-            now.hour < START_HOUR
-            or
-            now.hour >= END_HOUR
-        ):
-            return False
-
-
-        return True
-
-
-    except Exception as e:
-
-        error(
-            f"Time error: {e}"
-        )
-
-        return False
-
-
-
-# ==========================================
-# Symbol Filter
-# ==========================================
-
-def allowed_symbol(symbol):
-
-    try:
-
-        for bad in BLOCKED_SYMBOLS:
-
-            if bad in symbol:
-                return False
-
-
-        return symbol in SYMBOLS
-
-
-    except:
-
-        return False
-
-
-
-# ==========================================
-# Market Data Loader
-# ==========================================
-
-def get_market_data(symbol):
-
-    """
-    ضع هنا مصدر البيانات الخاص بك
-    (TwelveData / Binance / أي مزود آخر)
-    """
-
-    try:
-
-        # مثال هيكلي فقط
-        # يجب ربطه بمصدر البيانات المستخدم
-
-        df = pd.DataFrame()
-
-        return df
-
-
-    except Exception as e:
-
-        error(
-            f"Data error {symbol}: {e}"
-        )
+        if last_low < prev_low:
+            return "BEARISH"
 
         return None
 
+    # ==========================================
+    # Change Of Character
+    # ==========================================
 
+    def detect_choch(self):
+
+        trend = self.trend()
+        bos = self.detect_bos()
+
+        if trend == "DOWN" and bos == "BULLISH":
+            return "BULLISH"
+
+        if trend == "UP" and bos == "BEARISH":
+            return "BEARISH"
+
+        return None
+
+    # ==========================================
+    # Trend Strength
+    # ==========================================
+
+    def trend_strength(self):
+
+        ema20 = self.df.EMA20.iloc[-1]
+        ema50 = self.df.EMA50.iloc[-1]
+
+        distance = abs(ema20 - ema50)
+
+        atr = self.df.ATR.iloc[-1]
+
+        if atr == 0:
+            return 0
+
+        score = (distance / atr) * 100
+
+        return min(round(score, 2), 100)
+
+    # ==========================================
+    # Summary
+    # ==========================================
+
+    def summary(self):
+
+        return {
+
+            "trend": self.trend(),
+
+            "bos": self.detect_bos(),
+
+            "choch": self.detect_choch(),
+
+            "strength": self.trend_strength()
+
+        }
+  # ==========================================
+# liquidity.py
+# Professional Liquidity Engine
+# ==========================================
+
+import numpy as np
+
+
+class LiquidityEngine:
+
+    def __init__(self, df):
+        self.df = df.copy()
+
+    def swings(self, left=3, right=3):
+        highs = []
+        lows = []
+
+        for i in range(left, len(self.df)-right):
+            h = self.df.high.iloc[i]
+            l = self.df.low.iloc[i]
+
+            if h >= max(self.df.high.iloc[i-left:i+right+1]):
+                highs.append({
+                    "type": "SELL",
+                    "price": h,
+                    "index": i
+                })
+
+            if l <= min(self.df.low.iloc[i-left:i+right+1]):
+                lows.append({
+                    "type": "BUY",
+                    "price": l,
+                    "index": i
+                })
+
+        return highs + lows
+
+    def candles_since_touch(self, price, tolerance=0.00015):
+        candles = 0
+
+        for i in range(len(self.df)-1, -1, -1):
+            low = self.df.low.iloc[i]
+            high = self.df.high.iloc[i]
+
+            if low <= price+tolerance and high >= price-tolerance:
+                break
+
+            candles += 1
+
+        return candles
+
+    def zone_score(self, zone):
+        score = 0
+        gap = self.candles_since_touch(zone["price"])
+
+        # مدة الغياب
+        if gap >= 8:
+            score += 30
+
+        if gap >= 12:
+            score += 15
+
+        # إذا المنطقة قديمة
+        if zone["index"] < len(self.df)-20:
+            score += 15
+
+        # قوة الشمعة
+        candle = self.df.iloc[zone["index"]]
+        body = abs(candle.close - candle.open)
+        rng = candle.high - candle.low
+
+        if rng != 0:
+            ratio = body / rng
+            if ratio < 0.4:
+                score += 20
+
+        # الاتجاه
+        ema20 = self.df.EMA20.iloc[-1]
+        ema50 = self.df.EMA50.iloc[-1]
+
+        if zone["type"] == "BUY" and ema20 > ema50:
+            score += 20
+        elif zone["type"] == "SELL" and ema20 < ema50:
+            score += 20
+
+        return min(score, 100)
+
+    def early_warning(self, distance_threshold=0.00040):
+        all_swings = self.swings()
+        current_price = self.df.close.iloc[-1]
+
+        best_zone = None
+        min_dist = float('inf')
+
+        for zone in all_swings:
+            zone["score"] = self.zone_score(zone)
+            if zone["score"] < 70:
+                continue
+
+            dist = abs(current_price - zone["price"])
+            if dist <= distance_threshold and dist < min_dist:
+                min_dist = dist
+                best_zone = zone
+
+        if best_zone:
+            return {
+                "zone": best_zone,
+                "distance": round(min_dist, 5)
+            }
+
+        return None
+
+    # ==========================================
+    # Swing High / Swing Low
+    # ==========================================
+
+    def swings(self, left=3, right=3):
+
+        highs = []
+        lows = []
+
+        for i in range(left, len(self.df)-right):
+
+            h = self.df.high.iloc[i]
+            l = self.df.low.iloc[i]
+
+            if h >= max(self.df.high.iloc[i-left:i+right+1]):
+
+                highs.append({
+                    "type": "SELL",
+                    "price": h,
+                    "index": i
+                })
+
+            if l <= min(self.df.low.iloc[i-left:i+right+1]):
+
+                lows.append({
+                    "type": "BUY",
+                    "price": l,
+                    "index": i
+                })
+
+        return highs + lows
+
+    # ==========================================
+    # Candles Since Touch
+    # ==========================================
+
+    def candles_since_touch(
+        self,
+        price,
+        tolerance=0.00015
+    ):
+
+        candles = 0
+
+        for i in range(len(self.df)-1, -1, -1):
+
+            low = self.df.low.iloc[i]
+            high = self.df.high.iloc[i]
+
+            if low <= price+tolerance and high >= price-tolerance:
+                break
+
+            candles += 1
+
+        return candles
+
+    # ==========================================
+    # Zone Score
+    # ==========================================
+
+    def zone_score(self, zone):
+
+        score = 0
+
+        gap = self.candles_since_touch(zone["price"])
+
+        # مدة الغياب
+
+        if gap >= 8:
+            score += 30
+
+        if gap >= 12:
+            score += 15
+
+        # إذا المنطقة قديمة
+
+        if zone["index"] < len(self.df)-20:
+            score += 15
+
+        # قوة الشمعة
+
+        candle = self.df.iloc[zone["index"]]
+
+        body = abs(
+            candle.close-candle.open
+        )
+
+        rng = candle.high-candle.low
+
+        if rng != 0:
+
+            ratio = body/rng
+
+            if ratio < 0.4:
+                score += 20
+
+        # الاتجاه
+
+        ema20 = self.df.EMA20.iloc[-1]
+        ema50 = self.df.EMA50.iloc[-1]
+
+        if zone     
+        # ==========================================
+# m1_filter.py
+# Smart M1 Consolidation Filter
+# ==========================================
+
+import numpy as np
+
+
+class M1Filter:
+
+    def __init__(self, df):
+
+        self.df = df.copy()
+
+    # ==========================================
+    # Price Range
+    # ==========================================
+
+    def price_range(self, candles=8):
+
+        data = self.df.tail(candles)
+
+        highest = data.high.max()
+        lowest = data.low.min()
+
+        return highest - lowest
+
+    # ==========================================
+    # ATR
+    # ==========================================
+
+    def atr(self, period=14):
+
+        high = self.df.high
+        low = self.df.low
+        close = self.df.close.shift()
+
+        tr = np.maximum(
+            high-low,
+            np.maximum(
+                abs(high-close),
+                abs(low-close)
+            )
+        )
+
+        return tr.rolling(period).mean().iloc[-1]
+
+    # ==========================================
+    # Candle Body Ratio
+    # ==========================================
+
+    def average_body_ratio(self, candles=8):
+
+        data = self.df.tail(candles)
+
+        ratios = []
+
+        for _, candle in data.iterrows():
+
+            body = abs(
+                candle.close-candle.open
+            )
+
+            rng = candle.high-candle.low
+
+            if rng == 0:
+                continue
+
+            ratios.append(body/rng)
+
+        if len(ratios) == 0:
+            return 0
+
+        return np.mean(ratios)
+
+    # ==========================================
+    # Wick Ratio
+    # ==========================================
+
+    def wick_ratio(self, candles=8):
+
+        data = self.df.tail(candles)
+
+        values = []
+
+        for _, candle in data.iterrows():
+
+            body = abs(
+                candle.close-candle.open
+            )
+
+            rng = candle.high-candle.low
+
+            if rng == 0:
+                continue
+
+            values.append(
+                (rng-body)/rng
+            )
+
+        if len(values) == 0:
+            return 0
+
+        return np.mean(values)
+
+    # ==========================================
+    # Consolidation Score
+    # ==========================================
+
+    def consolidation_score(self):
+
+        score = 0
+
+        atr = self.atr()
+
+        if atr == 0:
+            return 100
+
+        rng = self.price_range()
+
+        if rng < atr:
+
+            score += 40
+
+        body = self.average_body_ratio()
+
+        if body < 0.40:
+
+            score += 25
+
+        wick = self.wick_ratio()
+
+        if wick > 0.55:
+
+            score += 20
+
+        closes = self.df.close.tail(8)
+
+        std = closes.std()
+
+        if std < atr*0.25:
+
+            score += 15
+
+        return min(score,100)
+
+    # ==========================================
+    # Consolidation
+    # ==========================================
+
+    def is_consolidation(self):
+
+        score = self.consolidation_score()
+
+        if score >= 60:
+
+            return True
+
+        return False
+
+    # ==========================================
+    # Fake Break Detection
+    # ==========================================
+
+    def fake_break(self):
+
+        last = self.df.iloc[-1]
+
+        previous = self.df.iloc[-2]
+
+        if (
+            last.high > previous.high
+            and
+            last.close < previous.high
+        ):
+
+            return "SELL_SWEEP"
+
+        if (
+            last.low < previous.low
+            and
+            last.close > previous.low
+        ):
+
+            return "BUY_SWEEP"
+
+        return None
+
+    # ==========================================
+    # Summary
+    # ==========================================
+
+    def summary(self):
+
+        return {
+
+            "consolidation":
+            self.is_consolidation(),
+
+            "score":
+            self.consolidation_score(),
+
+            "fake_break":
+            self.fake_break()
+
+        }
+       
+# ==========================================
+# rejection.py
+# Smart Rejection Engine
+# ==========================================
+
+import numpy as np
+
+
+class RejectionEngine:
+
+    def __init__(self, df):
+        self.df = df.copy()
+
+    def bullish_rejection(self):
+        candle = self.df.iloc[-1]
+        body = abs(candle.close - candle.open)
+        upper = candle.high - max(candle.open, candle.close)
+        lower = min(candle.open, candle.close) - candle.low
+        rng = candle.high - candle.low
+
+        if rng == 0:
+            return False
+
+        if lower > body * 2 and upper < body and candle.close > candle.open:
+            return True
+
+        return False
+
+    def bearish_rejection(self):
+        candle = self.df.iloc[-1]
+        body = abs(candle.close - candle.open)
+        upper = candle.high - max(candle.open, candle.close)
+        lower = min(candle.open, candle.close) - candle.low
+        rng = candle.high - candle.low
+
+        if rng == 0:
+            return False
+
+        if upper > body * 2 and lower < body and candle.close < candle.open:
+            return True
+
+        return False
+
+    def retest(self, zone_price, tolerance=0.00015):
+        candle = self.df.iloc[-1]
+
+        if candle.low <= zone_price + tolerance and candle.high >= zone_price - tolerance:
+            return True
+
+        return False
+
+    def summary(self):
+        bull = self.bullish_rejection()
+        bear = self.bearish_rejection()
+
+        score = 80 if (bull or bear) else 40
+
+        return {
+            "bullish": bull,
+            "bearish": bear,
+            "score": score,
+            "entry": self.df.close.iloc[-1]
+        }
+
+    # ==========================================
+    # Retest Detection
+    # ==========================================
+
+    def retest(self, zone_price, tolerance=0.00015):
+
+        candle = self.df.iloc[-1]
+
+        if (
+            candle.low <= zone_price + tolerance
+            and
+            candle 
+         # ==========================================
+# signal_engine.py
+# Professional Decision Engine
+# ==========================================
+
+from market_structure import MarketStructure
+from liquidity import LiquidityEngine
+from m1_filter import M1Filter
+from rejection import RejectionEngine
+
+import datetime
+
+
+class SignalEngine:
+
+    def __init__(self, df5, df1):
+        self.df5 = df5
+        self.df1 = df1
+
+    def candle_time_left(self):
+        now = datetime.datetime.utcnow()
+        minute = now.minute % 5
+        remaining = 5 - minute
+        return remaining
+
+    def generate(self):
+        structure = MarketStructure(self.df5).summary()
+        liquidity = LiquidityEngine(self.df5).early_warning()
+        m1 = M1Filter(self.df1).summary()
+        rejection = RejectionEngine(self.df1).summary()
+
+        if liquidity is None:
+            return None
+
+        if m1["consolidation"]:
+            return {
+                "status": "CANCEL",
+                "reason": "M1 Consolidation"
+            }
+
+        if liquidity["zone"]["score"] < 90:
+            return {
+                "status": "WAIT",
+                "reason": "Weak Zone"
+            }
+
+        if rejection["bullish"] is False and rejection["bearish"] is False:
+            return {
+                "status": "WATCH",
+                "zone": liquidity["zone"],
+                "distance": liquidity["distance"]
+            }
+
+        remain = self.candle_time_left()
+        decision = "ENTER NOW" if remain >= 2 else "WAIT NEXT CANDLE"
+
+        return {
+            "status": "ENTRY",
+            "trend": structure["trend"],
+            "bos": structure["bos"],
+            "choch": structure["choch"],
+            "trend_strength": structure["strength"],
+            "zone": liquidity["zone"],
+            "distance": liquidity["distance"],
+            "entry": rejection["entry"],
+            "rejection_score": rejection["score"],
+            "fake_break": m1["fake_break"],
+            "decision": decision
+        }
+
+    def telegram_message(self):
+        signal = self.generate()
+
+        if signal is None:
+            return None
+
+        if signal["status"] == "WATCH":
+            return f"""
+🟡 PRICE ALERT
+
+السعر يقترب من منطقة قوية
+
+النوع:
+{signal['zone']['type']}
+
+قوة المنطقة:
+{signal['zone']['score']}%
+
+المسافة:
+{signal['distance']}
+
+⏳ استعد ولا تدخل حتى يظهر الريجيكشن.
+"""
+
+        if signal["status"] == "WAIT":
+            return f"""
+🟠 WAIT
+
+السبب: {signal['reason']}
+"""
+
+        if signal["status"] == "CANCEL":
+            return f"""
+❌ CANCELLED
+
+السبب: {signal['reason']}
+"""
+
+        if signal["status"] == "ENTRY":
+            return f"""
+🟢 SIGNAL ENTRY
+
+النوع: {signal['zone']['type']}
+القرار: {signal['decision']}
+سعر الدخول: {signal['entry']}
+قوة الاتجاه: {signal['trend_strength']}%
+"""
+
+        return None
+
+    # ==========================================
+    # Remaining Candle Time
+    # ==========================================
+
+    def candle_time_left(self):
+
+        now = datetime.datetime.utcnow()
+
+        minute = now.minute % 5
+
+        remaining = 5 - minute
+
+        return remaining
+
+    # ==========================================
+    # Generate Signal
+    # ==========================================
+
+    def generate(self):
+
+        structure = MarketStructure(
+            self.df5
+        ).summary()
+
+        liquidity = LiquidityEngine(
+            self.df5
+        ).early_warning()
+
+        m1 = M1Filter(
+            self.df1
+        ).summary()
+
+        rejection = RejectionEngine(
+            self.df1
+        ).summary()
+
+        # لا توجد منطقة
+
+        if liquidity is None:
+
+            return None
+
+        # يوجد تجميع
+
+        if m1["consolidation"]:
+
+            return {
+
+                "status":"CANCEL",
+
+                "reason":"M1 Consolidation"
+
+            }
+
+        # منطقة ضعيفة
+
+        if liquidity["zone"]["score"] < 90:
+
+            return {
+
+                "status":"WAIT",
+
+                "reason":"Weak Zone"
+
+            }
+
+        # لم يظهر ريجيكشن
+
+        if (
+
+            rejection["bullish"] is False
+
+            and
+
+            rejection["bearish"] is False
+
+        ):
+
+            return {
+
+                "status":"WATCH",
+
+                "zone":liquidity["zone"],
+
+                "distance":liquidity["distance"]
+
+            }
+
+        # الوقت المتبقي
+
+        remain = self.candle_time_left()
+
+        decision = ""
+
+        if remain >= 2:
+
+            decision = "ENTER NOW"
+
+        else:
+
+            decision = "WAIT NEXT CANDLE"
+
+        return {
+
+            "status":"ENTRY",
+
+            "trend":structure["trend"],
+
+            "bos":structure["bos"],
+
+            "choch":structure["choch"],
+
+            "trend_strength":
+            structure["strength"],
+
+            "zone":
+            liquidity["zone"],
+
+            "distance":
+            liquidity["distance"],
+
+            "entry":
+            rejection["entry"],
+
+            "rejection_score":
+            rejection["score"],
+
+            "fake_break":
+            m1["fake_break"],
+
+            "decision":
+            decision
+
+        }
+
+    # ==========================================
+    # Telegram Message
+    # ==========================================
+
+    def telegram_message(self):
+
+        signal = self.generate()
+
+        if signal is None:
+
+            return None
+
+        if signal["status"] == "WATCH":
+
+            return f"""
+🟡 PRICE ALERT
+
+السعر يقترب من منطقة قوية
+
+النوع:
+{signal['zone']['type']}
+
+قوة المنطقة:
+{signal['zone']['score']}%
+
+المسافة:
+{signal['distance']}
+
+⏳ استعد ولا تدخل حتى يظهر الريجيكشن.
+"""
+
+        if signal["status"] == "WAIT":
+
+            return f"""
+🟠 WAIT
+
+{signal['   
+ # ==========================================
+# main.py
+# Professional SMC Bot
+# ==========================================
+
+import time
+from datetime import datetime
+
+from data import get_5m_data, get_1m_data
+from signal_engine import SignalEngine
+from telegram import send_message
 
 # ==========================================
-# Signal Message
+# Pairs
 # ==========================================
 
-def format_signal(symbol, signal):
+PAIRS = [
+
+    "EUR/USD",
+
+    "GBP/USD",
+
+    "USD/JPY",
+
+    "AUD/USD",
+
+    "USD/CAD",
+
+    "EUR/JPY",
+
+    "GBP/JPY"
+
+]
+
+# ==========================================
+# Signal Memory
+# ==========================================
+
+last_signal = {}
+
+COOLDOWN = 300   # 5 دقائق
+
+# ==========================================
+# Main Loop
+# ==========================================
+
+while True:
 
     try:
 
-        direction = (
-            "🟢 BUY"
-            if signal == "BUY"
-            else
-            "🔴 SELL"
-        )
+        for pair in PAIRS:
 
+            df5 = get_5m_data(pair)
 
-        message = f"""
-<b>🔥 SMC Professional Signal</b>
+            df1 = get_1m_data(pair)
 
-📊 Pair: {symbol}
+            if df5 is None or df1 is None:
+                continue
 
-📈 Direction: {direction}
+            engine = SignalEngine(
+                df5,
+                df1
+            )
 
-⏱ Timeframe: 5 Minutes
+            signal = engine.generate()
 
-🧠 Strategy:
-Order Block + FVG + BOS
+            if signal is None:
+                continue
 
-⚡ No Martingale
+            now = time.time()
 
-⏰ {datetime.now().strftime("%H:%M")}
-"""
+            # ======================================
+            # منع التكرار
+            # ======================================
 
+            if pair in last_signal:
 
-        return message
+                if now-last_signal[pair] < COOLDOWN:
+                    continue
 
+            # ======================================
+            # إرسال الحالات المهمة فقط
+            # ======================================
+
+            if signal["status"] in [
+
+                "WATCH",
+
+                "ENTRY",
+
+                "CANCEL"
+
+            ]:
+
+                message = engine.telegram_message()
+
+                send_message(message)
+
+                last_signal[pair] = now
+
+                print(
+
+                    datetime.now(),
+
+                    pair,
+
+                    signal["status"]
+
+                )
+
+        # تحديث كل 10 ثوانٍ
+        time.sleep(10)
 
     except Exception as e:
 
-        error(
-            f"Message error: {e}"
+        print(e)
+
+        time.sleep(20)
+    # ==========================================
+# telegram.py
+# Telegram Sender
+# ==========================================
+
+import requests
+from config import BOT_TOKEN, CHAT_ID
+
+URL = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+
+
+def send_message(text):
+
+    try:
+
+        requests.post(
+
+            URL,
+
+            data={
+
+                "chat_id": CHAT_ID,
+
+                "text": text,
+
+                "parse_mode": "HTML"
+
+            },
+
+            timeout=15
+
         )
 
-        return ""
+        return True
 
+    except Exception as e:
+
+        print("Telegram Error:", e)
+
+        return False
 
 
 # ==========================================
-# Main Engine
+# Early Warning
 # ==========================================
 
-def run_bot():
+def send_watch(pair, zone_type, distance):
 
-    info(
-        "SMC Bot Started"
-    )
+    message = f"""
+🟡 <b>EARLY WARNING</b>
+
+📊 {pair}
+
+السعر يقترب من منطقة {zone_type}
+
+📏 المسافة:
+{distance}
+
+⏳ لا تدخل الآن.
+انتظر الريجيكشن.
+"""
+
+    return send_message(message)
 
 
-    signals_today = 0
+# ==========================================
+# Entry Signal
+# ==========================================
+
+def send_entry(
+    pair,
+    signal,
+    entry,
+    decision,
+    confidence
+):
+
+    message = f"""
+🟢 <b>SMART ENTRY</b>
+
+📊 {pair}
+
+الاتجاه:
+{signal}
+
+🎯 أفضل دخول:
+
+{entry}
+
+📈 الثقة:
+
+{confidence}%
+
+━━━━━━━━━━━━
+
+القرار:
+
+{decision}
+
+مدة الصفقة:
+
+5 Minutes
+"""
+
+    return send_message(message)
 
 
-    sent_signals = set()
+# ==========================================
+# Cancel Signal
+# ==========================================
+
+def send_cancel(pair, reason):
+
+    message = f"""
+❌ <b>SIGNAL CANCELLED</b>
+
+📊 {pair}
+
+السبب:
+
+{reason}
+"""
+
+    return send_message(message)
 
 
+# ==========================================
+# Status Message
+# ==========================================
 
-    while True:
+def send_status(text):
 
-        try:
+    message = f"""
+🤖 Professional SMC Bot
+
+{text}
+"""
+
+    return send_message(message)
+    # ==========================================
+# config.py
+# Professional SMC Bot Configuration
+# ==========================================
+
+# ==========================
+# Telegram
+# ==========================
+
+BOT_TOKEN = "ضع_توكن_البوت"
+
+CHAT_ID = "-100xxxxxxxxxx"
+
+# ==========================
+# Timeframes
+# ==========================
+
+MAIN_TIMEFRAME = "5m"
+
+ENTRY_TIMEFRAME = "1m"
+
+# ==========================
+# Trading Time
+# ==========================
+
+START_HOUR = 11
+
+END_HOUR = 20
+
+ALLOWED_DAYS = [
+
+    0,  # Monday
+    1,
+    2,
+    3,
+    4   # Friday
+
+]
+
+# ==========================
+# Strategy
+# ==========================
+
+SWING_LEFT = 3
+
+SWING_RIGHT = 3
+
+ZONE_MIN_GAP = 8
+
+ZONE_SCORE = 90
+
+TOUCH_TOLERANCE = 0.00015
+
+WATCH_DISTANCE = 0.00040
+
+ENTRY_DISTANCE = 0.00010
+
+# ==========================
+# EMA
+# ==========================
+
+EMA_FAST = 20
+
+EMA_SLOW = 50
+
+# ==========================
+# RSI
+# ==========================
+
+RSI_PERIOD = 14
+
+RSI_OVERBOUGHT = 70
+
+RSI_OVERSOLD = 30
+
+# ==========================
+# ATR
+# ==========================
+
+ATR_PERIOD = 14
+
+# ==========================
+# Consolidation
+# ==========================
+
+M1_CONSOLIDATION_SCORE = 60
+
+# ==========================
+# Fake Break
+# ==========================
+
+ALLOW_LIQUIDITY_SWEEP = True
+
+# ==========================
+# Telegram Cooldown
+# ==========================
+
+SIGNAL_COOLDOWN = 300
+
+# ==========================
+# Scan
+# ==========================
+
+SCAN_INTERVAL = 10
+
+# ==========================
+# Expiry
+# ==========================
+
+EXPIRY = 5
+
+# ==========================
+# Market
+# ==========================
+
+PAIRS = [
+
+    "EUR/USD",
+
+    "GBP/USD",
+
+    "USD/JPY",
+
+    "AUD/USD",
+
+    "USD/CAD",
+
+    "EUR/JPY",
+
+    "GBP/JPY",
+
+    "EUR/GBP",
+
+    "GBP/AUD",
+
+    "AUD/CAD"
+
+]
+# ==========================================
+# watchlist.py
+# Smart Watchlist Engine
+# ==========================================
+
+import time
 
 
-            if not trading_time():
+class Watchlist:
 
-                time.sleep(60)
+    def __init__(self):
+
+        self.zones = {}
+
+    # ==========================================
+    # Add Zone
+    # ==========================================
+
+    def add(
+        self,
+        pair,
+        zone
+    ):
+
+        key = f"{pair}_{zone['price']}"
+
+        if key not in self.zones:
+
+            self.zones[key] = {
+
+                "pair": pair,
+
+                "zone": zone,
+
+                "status": "WATCH",
+
+                "created": time.time(),
+
+                "last_update": time.time(),
+
+                "alerts": 0
+
+            }
+
+    # ==========================================
+    # Remove Zone
+    # ==========================================
+
+    def remove(self, key):
+
+        if key in self.zones:
+
+            del self.zones[key]
+
+    # ==========================================
+    # Update Status
+    # ==========================================
+
+    def update_status(
+        self,
+        key,
+        status
+    ):
+
+        if key in self.zones:
+
+            self.zones[key]["status"] = status
+
+            self.zones[key]["last_update"] = time.time()
+
+    # ==========================================
+    # Get Zones
+    # ==========================================
+
+    def all(self):
+
+        return self.zones
+
+    # ==========================================
+    # Near Zone
+    # ==========================================
+
+    def near_price(
+        self,
+        pair,
+        current_price,
+        distance=0.00040
+    ):
+
+        result = []
+
+        for key, item in self.zones.items():
+
+            if item["pair"] != pair:
 
                 continue
 
+            zone = item["zone"]
+
+            if abs(
+                current_price-zone["price"]
+            ) <= distance:
+
+                result.append((key, item))
+
+        return result
+
+    # ==========================================
+    # Mark Alert Sent
+    # ==========================================
+
+    def increase_alert(
+        self,
+        key
+    ):
+
+        if key in self.zones:
+
+            self.zones[key]["alerts"] += 1
+
+            self.zones[key]["last_update"] = time.time()
+
+    # ==========================================
+    # Remove Old Zones
+    # ==========================================
+
+    def cleanup(
+        self,
+        hours=24
+    ):
+
+        now = time.time()
+
+        delete = []
+
+        for key, item in self.zones.items():
+
+            if now-item["created"] > hours*3600:
+
+                delete.append(key)
+
+        for key in delete:
+
+            del self.zones[key]
+
+    # ==========================================
+    # Used Zone
+    # ==========================================
+
+    def mark_used(
+        self,
+        key
+    ):
+
+        if key in self.zones:
+
+            self.zones[key]["status"] = "USED"
+
+            self.zones[key]["last_update"] = time.time()
+
+    # ==========================================
+    # Active Zones
+    # ==========================================
+
+    def active(self):
+
+        data = []
+
+        for key, item in self.zones.items():
+
+            if item["status"] == "WATCH":
+
+                data.append((key, item))
+
+        return data
+        # ==========================================
+# data.py
+# MT5 Data Provider
+# ==========================================
+
+import MetaTrader5 as mt5
+import pandas as pd
+
+# ==========================================
+# Connect
+# ==========================================
+
+def connect():
+
+    if not mt5.initialize():
+
+        print("MT5 Initialization Failed")
+
+        return False
+
+    return True
 
 
-            for symbol in SYMBOLS:
+# ==========================================
+# Shutdown
+# ==========================================
+
+def shutdown():
+
+    mt5.shutdown()
 
 
-                if not allowed_symbol(symbol):
+# ==========================================
+# Get Candles
+# ==========================================
 
-                    continue
+def get_data(symbol, timeframe, bars=500):
 
+    rates = mt5.copy_rates_from_pos(
+        symbol,
+        timeframe,
+        0,
+        bars
+    )
 
+    if rates is None:
+        return None
 
-                if signals_today >= MAX_SIGNALS_PER_DAY:
+    df = pd.DataFrame(rates)
 
-                    break
+    df["time"] = pd.to_datetime(
+        df["time"],
+        unit="s"
+    )
 
+    df.rename(
+        columns={
+            "tick_volume": "volume"
+        },
+        inplace=True
+    )
 
-
-                df = get_market_data(
-                    symbol
-                )
-
-
-                if df is None:
-
-                    continue
-
-
-
-                if len(df) < 80:
-
-                    continue
-
-
-
-                signal = generate_signal(
-                    df
-                )
-
+    return df
 
 
-                if signal is None:
+# ==========================================
+# M5
+# ==========================================
 
-                    continue
+def get_5m_data(symbol):
 
-
-                # التحقق من الوقت الأدنى بين الإشارات (5 دقائق)
-                if not can_send_signal():
-                    continue
-
-
-
-                signal_id = (
-                    symbol,
-                    signal,
-                    df.index[-1]
-                )
+    return get_data(
+        symbol,
+        mt5.TIMEFRAME_M5
+    )
 
 
+# ==========================================
+# M1
+# ==========================================
 
-                # منع التكرار
+def get_1m_data(symbol):
 
-                if signal_id in sent_signals:
-
-                    continue
-
-
-
-                sent_signals.add(
-                    signal_id
-                )
+    return get_data(
+        symbol,
+        mt5.TIMEFRAME_M1
+    )
 
 
-                message = format_signal(
-                    symbol,
-                    signal
-                )
+# ==========================================
+# Symbol Exists
+# ==========================================
+
+def symbol_available(symbol):
+
+    info = mt5.symbol_info(symbol)
+
+    return info is not None
+    # ==========================================
+# logger.py
+# Professional Logger
+# ==========================================
+
+import logging
+import os
+
+LOG_FOLDER = "logs"
+
+if not os.path.exists(LOG_FOLDER):
+    os.makedirs(LOG_FOLDER)
+
+logging.basicConfig(
+    filename=os.path.join(LOG_FOLDER, "bot.log"),
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(message)s"
+)
 
 
-                send_telegram(
-                    message
-                )
+def info(message):
+    print("[INFO]", message)
+    logging.info(message)
 
 
-                signals_today += 1
+def warning(message):
+    print("[WARNING]", message)
+    logging.warning(message)
 
 
-                info(
-                    f"Signal sent {symbol} {signal}"
-                )
+def error(message):
+    print("[ERROR]", message)
+    logging.error(message)
 
 
+def signal(
+    pair,
+    signal_type,
+    entry,
+    confidence,
+    reason=""
+):
 
-            time.sleep(30)
+    text = (
+        f"{pair} | "
+        f"{signal_type} | "
+        f"Entry={entry} | "
+        f"Confidence={confidence}% | "
+        f"{reason}"
+    )
+
+    info(text)
 
 
+def trade_result(
+    pair,
+    signal_type,
+    result,
+    profit=0
+):
 
-        except Exception as e:
+    text = (
+        f"{pair} | "
+        f"{signal_type} | "
+        f"Result={result} | "
+        f"Profit={profit}"
+    )
+
+    info(text)
 
 
-            error(
-                f"Main loop error: {e}"
+def startup():
+
+    info("========== BOT STARTED ==========")
+
+
+def shutdown():
+
+    info("========== BOT STOPPED ==========")
+    # ==========================================
+# price_action.py
+# Smart Price Action Engine
+# ==========================================
+
+import numpy as np
+
+
+class PriceAction:
+
+    def __init__(self, df):
+
+        self.df = df.copy()
+
+    # ==========================================
+    # Candle Strength
+    # ==========================================
+
+    def candle_strength(self):
+
+        candle = self.df.iloc[-1]
+
+        body = abs(candle["close"] - candle["open"])
+        rng = candle["high"] - candle["low"]
+
+        if rng == 0:
+            return 0
+
+        return round((body / rng) * 100, 2)
+
+    # ==========================================
+    # Rejection
+    # ==========================================
+
+    def rejection(self):
+
+        candle = self.df.iloc[-1]
+
+        body = abs(candle["close"] - candle["open"])
+
+        upper = candle["high"] - max(
+            candle["open"],
+            candle["close"]
+        )
+
+        lower = min(
+            candle["open"],
+            candle["close"]
+        ) - candle["low"]
+
+        if lower > body * 2:
+
+            return "BUY"
+
+        if upper > body * 2:
+
+            return "SELL"
+
+        return None
+
+    # ==========================================
+    # Momentum
+    # ==========================================
+
+    def momentum(self):
+
+        last5 = self.df.tail(5)
+
+        move = abs(
+
+            last5["close"].iloc[-1]
+
+            -
+
+            last5["close"].iloc[0]
+
+        )
+
+        avg = np.mean(
+
+            abs(
+
+                last5["close"]
+
+                -
+
+                last5["open"]
+
             )
 
+        )
 
-            time.sleep(60)
+        if avg == 0:
+            return 0
 
+        return round(
 
+            (move / avg) * 10,
 
+            2
 
+        )
+
+    # ==========================================
+    # Speed
+    # ==========================================
+
+    def speed(self):
+
+        last5 = self.df.tail(5)
+
+        total = 0
+
+        for _, candle in last5.iterrows():
+
+            total += abs(
+
+                candle["close"]
+
+                -
+
+                candle["open"]
+
+            )
+
+        return round(total, 5)
+
+    # ==========================================
+    # Compression
+    # ==========================================
+
+    def compression(self):
+
+        candles = self.df.tail(5)
+
+        ranges = []
+
+        for _, candle in candles.iterrows():
+
+            ranges.append(
+
+                candle["high"]
+
+                -
+
+                candle["low"]
+
+            )
+
+        if len(ranges) < 2:
+            return False
+
+        return ranges[-1] < ranges[0] * 0.6
+
+    # ==========================================
+    # Summary
+    # ==========================================
+
+    def summary(self):
+
+        return {
+
+            "strength":
+
+            self.candle_strength(),
+
+            "rejection":
+
+            self.rejection(),
+
+            "momentum":
+
+            self.momentum(),
+
+            "speed":
+
+            self.speed(),
+
+            "compression":
+
+            self.compression()
+
+        }
+        # ==========================================
+# entry_manager.py
+# Smart Entry Manager
 # ==========================================
-# Start
+
+from price_action import PriceAction
+from rejection import RejectionEngine
+from m1_filter import M1Filter
+
+
+class EntryManager:
+
+    def __init__(self, df5, df1, zone):
+
+        self.df5 = df5
+        self.df1 = df1
+        self.zone = zone
+
+        self.pa = PriceAction(df1)
+        self.reject = RejectionEngine(df1)
+        self.filter = M1Filter(df1)
+
+    # ==========================================
+    # Distance To Zone
+    # ==========================================
+
+    def distance(self):
+
+        price = self.df1.close.iloc[-1]
+
+        return abs(price - self.zone["price"])
+
+    # ==========================================
+    # Near Zone
+    # ==========================================
+
+    def near_zone(self):
+
+        return self.distance() <= 0.00020
+
+    # ==========================================
+    # Can Enter
+    # ==========================================
+
+    def can_enter(self):
+
+        if not self.near_zone():
+
+            return False, "Price Far"
+
+        if self.filter.is_consolidation():
+
+            return False, "M1 Consolidation"
+
+        rejection = self.reject.summary()
+
+        if rejection["score"] < 60:
+
+            return False, "Weak Rejection"
+
+        return True, "Ready"
+
+    # ==========================================
+    # Best Entry
+    # ==========================================
+
+    def best_entry(self):
+
+        candles = self.df1.tail(5)
+
+        if self.zone["type"] == "BUY":
+
+            return round(candles.low.min(), 5)
+
+        return round(candles.high.max(), 5)
+
+    # ==========================================
+    # Decision
+    # ==========================================
+
+    def decision(self):
+
+        ok, reason = self.can_enter()
+
+        if not ok:
+
+            return {
+
+                "status": "WAIT",
+
+                "reason": reason
+
+            }
+
+        remaining = 5 - (self.df5.index[-1] % 5)
+
+        if remaining >= 2:
+
+            action = "ENTER NOW"
+
+        else:
+
+            action = "WAIT NEXT M5"
+
+        return {
+
+            "status": "ENTRY",
+
+            "entry": self.best_entry(),
+
+            "decision": action,
+
+            "reason": "Confirmed"
+
+        }
+        # ==========================================
+# trade_manager.py
+# Professional Trade Manager
 # ==========================================
 
-if __name__ == "__main__":
+import time
 
-    run_bot()
+
+class TradeManager:
+
+    def __init__(self):
+
+        self.active_trade = None
+
+    # ==========================================
+    # Create Trade
+    # ==========================================
+
+    def create(
+        self,
+        pair,
+        signal,
+        entry,
+        confidence
+    ):
+
+        self.active_trade = {
+
+            "pair": pair,
+
+            "signal": signal,
+
+            "entry": entry,
+
+            "confidence": confidence,
+
+            "status": "WATCH",
+
+            "created": time.time(),
+
+            "alerts": []
+
+        }
+
+        return self.active_trade
+
+    # ==========================================
+    # Update Status
+    # ==========================================
+
+    def update(self, status):
+
+        if self.active_trade is None:
+            return
+
+        self.active_trade["status"] = status
+
+    # ==========================================
+    # Add Alert
+    # ==========================================
+
+    def add_alert(self, text):
+
+        if self.active_trade is None:
+            return
+
+        self.active_trade["alerts"].append(text)
+
+    # ==========================================
+    # Expired
+    # ==========================================
+
+    def expired(self, seconds=300):
+
+        if self.active_trade is None:
+            return True
+
+        return (
+
+            time.time()
+
+            -
+
+            self.active_trade["created"]
+
+        ) >= seconds
+
+    # ==========================================
+    # Finish
+    # ==========================================
+
+    def close(self, result):
+
+        if self.active_trade is None:
+            return
+
+        self.active_trade["result"] = result
+
+        self.active_trade["status"] = "FINISHED"
+
+    # ==========================================
+    # Clear
+    # ==========================================
+
+    def reset(self):
+
+        self.active_trade = None
+
+    # ==========================================
+    # Get Trade
+    # ==========================================
+
+    def current(self):
+
+        return self.active_trade
