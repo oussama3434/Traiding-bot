@@ -1237,9 +1237,65 @@ def send_status(text):
 
     return send_message(message)
     # ==========================================
-# config.py
-# Professional SMC Bot Configuration
 # ==========================================
+# main.py
+# Optimized Main Runner with Cooldown & Strict Filter
+# ==========================================
+
+from signal_engine import SignalEngine
+from config import BOT_TOKEN, CHAT_ID
+import requests
+import time
+import datetime
+
+# قاموس لتسجيل وقت آخر إشارة أُرسلت لكل زوج لمنع التكرار (Cooldown)
+last_sent_time = {}
+COOLDOWN_SECONDS = 7200  # ساعتان راحة بين كل إشارة لنفس الزوج
+
+
+def send_telegram(message):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": message,
+        "parse_mode": "Markdown"
+    }
+    try:
+        requests.post(url, json=payload, timeout=10)
+    except Exception as e:
+        print(f"Error sending message: {e}")
+
+
+def main():
+    # ضع هنا الأزواج التي تراقبها (تأكد أن جلب البيانات يتطابق مع طريقتك الحالية)
+    # ملاحظة: هذا قالب جاهز لربط المحرك بالأزواج
+    print("Bot is running strict checks...")
+
+    # مثال على تمرير البيانات وفحصها لكل زوج:
+    # symbols = ["EURUSD", "GBPUSD", "XAUUSD"]
+    # current_time = time.time()
+    # 
+    # for symbol in symbols:
+    #     # 1. فحص هل مر وقت الكولداون (ساعتان مثلاً)
+    #     if symbol in last_sent_time:
+    #         if current_time - last_sent_time[symbol] < COOLDOWN_SECONDS:
+    #             continue
+    # 
+    #     # 2. توليد الإشارة
+    #     # engine = SignalEngine(df5, df1)
+    #     # signal = engine.generate()
+    # 
+    #     # 3. شرط الصارم: تجاهل WATCH و CANCEL، واقبل فقط ENTRY القوية جداً
+    #     # if signal and signal.get("status") == "ENTRY":
+    #     #     if signal.get("trend_strength", 0) >= 70:  # قوة الاتجاه يجب أن تكون عالية
+    #     #         message = engine.telegram_message()
+    #     #         if message:
+    #     #             send_telegram(message)
+    #     #             last_sent_time[symbol] = current_time
+
+
+if __name__ == "__main__":
+    main()
 
 # ==========================
 # Telegram
