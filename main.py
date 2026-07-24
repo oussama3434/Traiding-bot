@@ -935,15 +935,61 @@ class SignalEngine:
 {signal['   
  # ==========================================
 # main.py
-# Professional SMC Bot
+# Main Runner with Strict Filtering & Cooldown
 # ==========================================
 
-import time
-from datetime import datetime
-
-from data import get_5m_data, get_1m_data
 from signal_engine import SignalEngine
-from telegram import send_message
+from config import BOT_TOKEN, CHAT_ID
+import requests
+import time
+
+# قاموس لتسجيل وقت آخر إشارة أُرسلت لكل زوج لمنع التكرار
+last_sent_time = {}
+COOLDOWN_SECONDS = 3600  # ساعة كاملة بين كل إشارة لنفس الزوج (يمكنك تعديلها)
+
+
+def send_telegram(message):
+    url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": message,
+        "parse_mode": "Markdown"
+    }
+    try:
+        requests.post(url, json=payload, timeout=10)
+    except Exception as e:
+        print(f"Error sending message: {e}")
+
+
+def run():
+    # قائمة الأزواج التي يراقبها البوت (تأكد من مطابقتها لما لديك)
+    symbols = ["EURUSD", "GBPUSD", "XAUUSD"]
+    
+    current_time = time.time()
+
+    for symbol in symbols:
+        # هنا يتم جلب البيانات أو فحص الإشارة لكل زوج
+        # (استبدل هذا السطر بطريقة جلب البيانات الحالية لديك)
+        # signal_engine = SignalEngine(df5, df1)
+        # signal = signal_engine.generate()
+        
+        # تجنب التكرار العشوائي لنفس الزوج
+        if symbol in last_sent_time:
+            if current_time - last_sent_time[symbol] < COOLDOWN_SECONDS:
+                continue  # تخطي هذا الزوج لأنه أرسل إشارة قريباً
+
+        # شرط القوة: لا ترسل إلا إذا كانت الإشارة ENTRY حقيقية وقوية جداً
+        # وتجاهل رسائل WATCH المزعجة المتكررة
+        # if signal and signal.get("status") == "ENTRY" and signal.get("rejection_score", 0) >= 80:
+        #     message = signal_engine.telegram_message()
+        #     if message:
+        #         send_telegram(message)
+        #         last_sent_time[symbol] = current_time
+
+
+if __name__ == "__main__":
+    run()
+
 
 # ==========================================
 # Pairs
