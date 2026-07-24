@@ -494,9 +494,19 @@ def detect_fvg(df):
 
             if c1["low"] > c3["high"]:
 
-                gap = (
-                    c1["
-   # ==========================================
+         # Bearish FVG
+        if c1["low"] > c3["high"]:
+
+            gap = c1["low"] - c3["high"]
+
+            if gap >= minimum_gap:
+
+                return {
+                    "direction": "SELL",
+                    "top": c1["low"],
+                    "bottom": c3["high"]
+                }
+   
 # Rejection Confirmation
 # ==========================================
 
