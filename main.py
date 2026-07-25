@@ -933,8 +933,6 @@ class SignalEngine:
 🟠 WAIT
 
 {signal['   
- # ==========================================
-# main.py
 # Main Runner with Strict Filtering & Cooldown
 # ==========================================
 
@@ -945,7 +943,7 @@ import time
 
 # قاموس لتسجيل وقت آخر إشارة أُرسلت لكل زوج لمنع التكرار
 last_sent_time = {}
-COOLDOWN_SECONDS = 3600  # ساعة كاملة بين كل إشارة لنفس الزوج (يمكنك تعديلها)
+COOLDOWN_SECONDS = 3600  # ساعة كاملة بين كل إشارة لنفس الزوج
 
 
 def send_telegram(message):
@@ -956,39 +954,53 @@ def send_telegram(message):
         "parse_mode": "Markdown"
     }
     try:
-        requests.post(url, json=payload, timeout=10)
+        response = requests.post(url, json=payload, timeout=10)
+        print(f"Telegram Response: {response.status_code}")
     except Exception as e:
         print(f"Error sending message: {e}")
 
 
 def run():
-    # قائمة الأزواج التي يراقبها البوت (تأكد من مطابقتها لما لديك)
+    # قائمة الأزواج التي يراقبها البوت
     symbols = ["EURUSD", "GBPUSD", "XAUUSD"]
     
+    print("--- Checking market for signals ---")
     current_time = time.time()
 
     for symbol in symbols:
-        # هنا يتم جلب البيانات أو فحص الإشارة لكل زوج
-        # (استبدل هذا السطر بطريقة جلب البيانات الحالية لديك)
-        # signal_engine = SignalEngine(df5, df1)
-        # signal = signal_engine.generate()
-        
-        # تجنب التكرار العشوائي لنفس الزوج
-        if symbol in last_sent_time:
-            if current_time - last_sent_time[symbol] < COOLDOWN_SECONDS:
-                continue  # تخطي هذا الزوج لأنه أرسل إشارة قريباً
+        try:
+            # 1. جلب البيانات وتحليلها لكل زوج (تأكد من تمرير البيانات الصحيحة حسب تصميم ملف signal_engine لديك)
+            # مثال: فرض أن SignalEngine يأخذ الرمز أو البيانات مباشرة
+            signal_engine = SignalEngine(symbol) # عدل هذا السطر حسب كيف يتم استدعاء ملف signal_engine لديك
+            signal = signal_engine.generate()
 
-        # شرط القوة: لا ترسل إلا إذا كانت الإشارة ENTRY حقيقية وقوية جداً
-        # وتجاهل رسائل WATCH المزعجة المتكررة
-        # if signal and signal.get("status") == "ENTRY" and signal.get("rejection_score", 0) >= 80:
-        #     message = signal_engine.telegram_message()
-        #     if message:
-        #         send_telegram(message)
-        #         last_sent_time[symbol] = current_time
+            # 2. تجنب التكرار العشوائي لنفس الزوج
+            if symbol in last_sent_time:
+                if current_time - last_sent_time[symbol] < COOLDOWN_SECONDS:
+                    print(symbol: تم تخطيه بسبب فترة الانتظار (Cooldown))
+                    continue
+
+            # 3. شروط القوة: لا ترسل إلا إذا كانت الإشارة ENTRY حقيقية وقوية
+            if signal and signal.get("status") == "ENTRY" and signal.get("rejection_score", 0) >= 80:
+                message = signal_engine.telegram_message()
+                if message:
+                    send_telegram(message)
+                    last_sent_time[symbol] = current_time
+                    print(f"تم إرسال إشارة ناجحة للزوج: {symbol}")
+            else:
+                print(f"الزوج {symbol}: لا توجد فرصة مطابقة للشروط الصارمة حالياً.")
+
+        except Exception as e:
+            print(f"Error processing symbol {symbol}: {e}")
 
 
 if __name__ == "__main__":
-    run()
+    print("Bot started and running continuously...")
+    while True:
+        run()
+        # اجعل البوت ينتظر مثلاً دقيقتين أو 5 دقائق بين كل فحص شامل للسوق لتجنب الضغط على السيرفر
+        time.sleep(120) 
+
 
 
 # ==========================================
