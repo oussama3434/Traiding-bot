@@ -53,7 +53,7 @@ MIN_FVG_SCORE = 80
 
 MIN_STRUCTURE_SCORE = 75
 
-MIN_REJECTION_SIZE = 0.50
+MIN_REJECTION_SIZE = 0.60
 
 MIN_LIQUIDITY_SWEEP = True
 
@@ -64,19 +64,20 @@ USE_CONSOLIDATION_FILTER = True
 USE_PRICE_ACTION = True
 
 USE_SMC = True
-
+USE_MULTI_TIMEFRAME = True
 # ========= CONFIRMATION =========
 USE_EMA = True
 
 USE_RSI = True
 
 USE_MACD = True
-
+USE_TREND_FILTER = True
 # ========= SIGNALS =========
 MIN_SIGNAL_INTERVAL = 300      # 5 minutes
 
 MAX_SIGNALS_PER_DAY = 12
-
+COOLDOWN_AFTER_SIGNAL = True
+MAX_SPREAD = 20
 # ========= TELEGRAM =========
 BOT_TOKEN = "8250531737:AAGyXgGThfPV-7UmA_skpmP4J6de-eOe7rk"
 
@@ -285,7 +286,7 @@ def get_main_pairs():
     الأزواج الأساسية التي يراقبها البوت دائماً.
     """
 
-        return WATCHLIST
+ return WATCHLIST
         "EURUSD",
         "GBPUSD",
         "USDJPY",
@@ -305,7 +306,6 @@ import pandas as pd
 
 from config import (
     DATA_PROVIDER,
-    API_KEY,
     LOOKBACK_CANDLES
 )
 
@@ -320,7 +320,7 @@ class MarketData:
             DATA_PROVIDER
         )
 
-        self.api_key = API_KEY
+        
 
 
 
@@ -342,7 +342,10 @@ class MarketData:
                 LOOKBACK_CANDLES
             )
 
-            return df
+           if isinstance(df, pd.DataFrame):
+    return df
+
+return pd.DataFrame() 
 
 
         except Exception as e:
@@ -394,7 +397,7 @@ class MarketData:
             return False
 
 
-        if len(df) < LOOKBACK_CANDLES:
+        if len(df) < 100:
             return False
 
 
@@ -426,7 +429,8 @@ class MarketData:
     ):
 
         df = df.copy()
-
+if df.empty:
+    return df
         df = df.drop_duplicates()
 
         df = df.dropna()
@@ -451,7 +455,8 @@ class MarketData:
         df5 = self.get_5m(pair)
 
         df1 = self.get_1m(pair)
-
+if df5.empty or df1.empty:
+    return None, None
 
 
         if not self.validate_dataframe(df5):
