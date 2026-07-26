@@ -79,6 +79,118 @@ API_KEY = ""
 DEBUG = False
 # ==========================================
 # Professional SMC Bot V2
+# utils/time_filter.py
+# ==========================================
+
+import datetime
+import pytz
+
+
+class TimeFilter:
+
+
+    def __init__(
+        self,
+        start_hour=8,
+        end_hour=20,
+        timezone="UTC"
+    ):
+
+        self.start_hour = start_hour
+        self.end_hour = end_hour
+
+        self.timezone = pytz.timezone(
+            timezone
+        )
+
+
+    # ==========================================
+    # الوقت الحالي
+    # ==========================================
+
+    def now(self):
+
+        return datetime.datetime.now(
+            self.timezone
+        )
+
+
+    # ==========================================
+    # يوم العمل
+    # ==========================================
+
+    def is_work_day(self):
+
+        current = self.now()
+
+        # الاثنين = 0
+        # الجمعة = 4
+
+        return current.weekday() in [
+            0,
+            1,
+            2,
+            3,
+            4
+        ]
+
+
+    # ==========================================
+    # ساعات التداول
+    # ==========================================
+
+    def is_trading_time(self):
+
+        current = self.now()
+
+        hour = current.hour
+
+
+        return (
+            hour >= self.start_hour
+            and
+            hour <= self.end_hour
+        )
+
+
+    # ==========================================
+    # الفلتر النهائي
+    # ==========================================
+
+    def allowed(self):
+
+        if not self.is_work_day():
+
+            return False
+
+
+        if not self.is_trading_time():
+
+            return False
+
+
+        return True
+
+
+    # ==========================================
+    # حالة الفلتر
+    # ==========================================
+
+    def status(self):
+
+        if not self.is_work_day():
+
+            return "Weekend"
+
+
+        if not self.is_trading_time():
+
+            return "Outside Trading Hours"
+
+
+        return "ACTIVE"
+# ==========================================
+# Professional SMC Bot V2
 # data/pairs.py
 # ==========================================
 
@@ -171,1546 +283,7 @@ def get_main_pairs():
         "EURJPY",
         "GBPJPY"
 
-    ]# ==========================================
-# Professional SMC Bot V2
-# data/market.py
-# ==========================================
-
-import pandas as pd
-import requests
-
-from config import (
-    DATA_PROVIDER,
-    API_KEY,
-    LOOKBACK_CANDLES
-)
-
-
-class MarketData:
-
-    def __init__(self):
-        self.provider = DATA_PROVIDER
-        self.api_key = API_KEY
-
-    def get_candles(self, pair, timeframe):
-        """
-        جلب بيانات الشموع من مزود البيانات.
-        سيتم ربطه لاحقاً مع مزود البيانات النهائي.
-        """
-
-        try:
-
-            df = pd.DataFrame()
-
-            # ===============================
-            # سيتم إضافة API هنا لاحقاً
-            # ===============================
-
-            return df
-
-        except Exception as e:
-            print(f"[Market] {e}")
-            return pd.DataFrame()
-
-    def get_5m(self, pair):
-        """
-        بيانات فريم 5 دقائق
-        """
-
-        return self.get_candles(
-            pair,
-            "5m"
-        )
-
-    def get_1m(self, pair):
-        """
-        بيانات فريم الدقيقة
-        """
-
-        return self.get_candles(
-            pair,
-            "1m"
-        )
-
-    def validate_dataframe(self, df):
-        """
-        التأكد من سلامة البيانات
-        """
-
-        if df is None:
-            return False
-
-        if len(df) < LOOKBACK_CANDLES:
-            return False
-
-        required = [
-            "open",
-            "high",
-            "low",
-            "close"
-        ]
-
-        for col in required:
-
-            if col not in df.columns:
-                return False
-
-        return True
-
-    def prepare_dataframe(self, df):
-        """
-        تنظيف وترتيب البيانات
-        """
-
-        df = df.copy()
-
-        df = df.drop_duplicates()
-
-        df = df.dropna()
-
-        df = df.reset_index(drop=True)
-
-        return df
-
-    def load(self, pair):
-        """
-        جلب جميع البيانات المطلوبة للتحليل
-        """
-
-        df5 = self.get_5m(pair)
-        df1 = self.get_1m(pair)
-
-        if not self.validate_dataframe(df5):
-            return None, None
-
-        if not self.validate_dataframe(df1):
-            return None, None
-
-        df5 = self.prepare_dataframe(df5)
-        df1 = self.prepare_dataframe(df1)
-
-        return df5, df1
-# ==========================================
-# Professional SMC Bot V2
-# strategy/zones.py
-# ==========================================
-
-import pandas as pd
-
-from config import MIN_ZONE_SCORE
-
-
-class ZoneDetector:
-
-    def __init__(self, df):
-        self.df = df
-
-    def is_demand_zone(self, index):
-
-        if index < 2:
-            return False
-
-        c1 = self.df.iloc[index - 2]
-        c2 = self.df.iloc[index - 1]
-        c3 = self.df.iloc[index]
-
-        return (
-            c1["close"] < c1["open"] and
-            c2["close"] < c2["open"] and
-            c3["close"] > c3["open"] and
-            c3["close"] > c2["high"]
-        )
-
-    def is_supply_zone(self, index):
-
-        if index < 2:
-            return False
-
-        c1 = self.df.iloc[index - 2]
-        c2 = self.df.iloc[index - 1]
-        c3 = self.df.iloc[index]
-
-        return (
-            c1["close"] > c1["open"] and
-            c2["close"] > c2["open"] and
-            c3["close"] < c3["open"] and
-            c3["close"] < c2["low"]
-        )
-
-    def calculate_score(self, zone):
-
-        score = 0
-
-        score += 30      # تكوين المنطقة
-        score += 20      # الزخم
-        score += 20      # حجم الكسر
-        score += 15      # نظافة الحركة
-        score += 15      # عدم إعادة الاختبار
-
-        return score
-
-    def detect(self):
-
-        zones = []
-
-        for i in range(2, len(self.df) - 1):
-
-            if self.is_demand_zone(i):
-
-                zone = {
-                    "type": "BUY",
-                    "high": self.df.iloc[i]["high"],
-                    "low": self.df.iloc[i]["low"],
-                    "index": i
-                }
-
-                zone["score"] = self.calculate_score(zone)
-
-                if zone["score"] >= MIN_ZONE_SCORE:
-                    zones.append(zone)
-
-            elif self.is_supply_zone(i):
-
-                zone = {
-                    "type": "SELL",
-                    "high": self.df.iloc[i]["high"],
-                    "low": self.df.iloc[i]["low"],
-                    "index": i
-                }
-
-                zone["score"] = self.calculate_score(zone)
-
-                if zone["score"] >= MIN_ZONE_SCORE:
-                    zones.append(zone)
-
-        return sorted(
-            zones,
-            key=lambda x: x["score"],
-            reverse=True
-        )
-# ==========================================
-# Professional SMC Bot V2
-# strategy/price_action.py
-# ==========================================
-
-class PriceAction:
-
-    def __init__(self, df):
-        self.df = df
-
-    def body_size(self, candle):
-        return abs(candle["close"] - candle["open"])
-
-    def upper_wick(self, candle):
-        return candle["high"] - max(candle["open"], candle["close"])
-
-    def lower_wick(self, candle):
-        return min(candle["open"], candle["close"]) - candle["low"]
-
-    def is_bullish_pinbar(self, candle):
-
-        body = self.body_size(candle)
-        lower = self.lower_wick(candle)
-        upper = self.upper_wick(candle)
-
-        return (
-            lower > body * 2 and
-            upper < body
-        )
-
-    def is_bearish_pinbar(self, candle):
-
-        body = self.body_size(candle)
-        upper = self.upper_wick(candle)
-        lower = self.lower_wick(candle)
-
-        return (
-            upper > body * 2 and
-            lower < body
-        )
-
-    def bullish_engulfing(self, index):
-
-        if index == 0:
-            return False
-
-        prev = self.df.iloc[index - 1]
-        curr = self.df.iloc[index]
-
-        return (
-            prev["close"] < prev["open"] and
-            curr["close"] > curr["open"] and
-            curr["open"] <= prev["close"] and
-            curr["close"] >= prev["open"]
-        )
-
-    def bearish_engulfing(self, index):
-
-        if index == 0:
-            return False
-
-        prev = self.df.iloc[index - 1]
-        curr = self.df.iloc[index]
-
-        return (
-            prev["close"] > prev["open"] and
-            curr["close"] < curr["open"] and
-            curr["open"] >= prev["close"] and
-            curr["close"] <= prev["open"]
-        )
-
-    def strong_bullish_candle(self, candle):
-
-        body = self.body_size(candle)
-
-        return (
-            candle["close"] > candle["open"] and
-            body > (candle["high"] - candle["low"]) * 0.70
-        )
-
-    def strong_bearish_candle(self, candle):
-
-        body = self.body_size(candle)
-
-        return (
-            candle["close"] < candle["open"] and
-            body > (candle["high"] - candle["low"]) * 0.70
-        )
-
-    def analyze(self, index):
-
-        candle = self.df.iloc[index]
-
-        result = {
-            "bullish_pinbar": self.is_bullish_pinbar(candle),
-            "bearish_pinbar": self.is_bearish_pinbar(candle),
-            "bullish_engulfing": self.bullish_engulfing(index),
-            "bearish_engulfing": self.bearish_engulfing(index),
-            "strong_bullish": self.strong_bullish_candle(candle),
-            "strong_bearish": self.strong_bearish_candle(candle)
-        }
-
-        return result
-# ==========================================
-# Professional SMC Bot V2
-# strategy/smart_money.py
-# ==========================================
-
-class SmartMoneyConcepts:
-
-    def __init__(self, df):
-        self.df = df
-
-    # ==========================================
-    # Break Of Structure (BOS)
-    # ==========================================
-
-    def detect_bos(self, index):
-
-        if index < 5:
-            return None
-
-        current = self.df.iloc[index]
-
-        previous_high = self.df.iloc[index-5:index]["high"].max()
-        previous_low = self.df.iloc[index-5:index]["low"].min()
-
-        if current["close"] > previous_high:
-            return "BULLISH"
-
-        if current["close"] < previous_low:
-            return "BEARISH"
-
-        return None
-
-    # ==========================================
-    # Change Of Character (CHOCH)
-    # ==========================================
-
-    def detect_choch(self, index):
-
-        if index < 10:
-            return None
-
-        bos_now = self.detect_bos(index)
-        bos_prev = self.detect_bos(index - 1)
-
-        if bos_now != bos_prev:
-            return bos_now
-
-        return None
-
-    # ==========================================
-    # Fair Value Gap (FVG)
-    # ==========================================
-
-    def detect_fvg(self, index):
-
-        if index < 2:
-            return None
-
-        c1 = self.df.iloc[index - 2]
-        c2 = self.df.iloc[index - 1]
-        c3 = self.df.iloc[index]
-
-        # Bullish FVG
-        if c1["high"] < c3["low"]:
-
-            return {
-                "type": "BUY",
-                "high": c3["low"],
-                "low": c1["high"]
-            }
-
-        # Bearish FVG
-        if c1["low"] > c3["high"]:
-
-            return {
-                "type": "SELL",
-                "high": c1["low"],
-                "low": c3["high"]
-            }
-
-        return None
-
-    # ==========================================
-    # Liquidity Sweep
-    # ==========================================
-
-    def detect_liquidity_sweep(self, index):
-
-        if index < 5:
-            return None
-
-        current = self.df.iloc[index]
-
-        previous_high = self.df.iloc[index-5:index]["high"].max()
-        previous_low = self.df.iloc[index-5:index]["low"].min()
-
-        # أخذ سيولة القمم
-        if (
-            current["high"] > previous_high and
-            current["close"] < previous_high
-        ):
-            return "SELL"
-
-        # أخذ سيولة القيعان
-        if (
-            current["low"] < previous_low and
-            current["close"] > previous_low
-        ):
-            return "BUY"
-
-        return None
-
-    # ==========================================
-    # Order Block
-    # ==========================================
-
-    def detect_order_block(self, index):
-
-        if index < 2:
-            return None
-
-        candle = self.df.iloc[index]
-
-        if candle["close"] > candle["open"]:
-
-            return {
-                "type": "BUY",
-                "high": candle["high"],
-                "low": candle["low"]
-            }
-
-        if candle["close"] < candle["open"]:
-
-            return {
-                "type": "SELL",
-                "high": candle["high"],
-                "low": candle["low"]
-            }
-
-        return None
-
-    # ==========================================
-    # Full Analysis
-    # ==========================================
-
-    def analyze(self, index):
-
-        return {
-
-            "bos": self.detect_bos(index),
-
-            "choch": self.detect_choch(index),
-
-            "fvg": self.detect_fvg(index),
-
-            "liquidity": self.detect_liquidity_sweep(index),
-
-            "order_block": self.detect_order_block(index)
-
-        }
-# ==========================================
-# Professional SMC Bot V2
-# strategy/rejection.py
-# ==========================================
-
-class RejectionDetector:
-
-    def __init__(self, df):
-        self.df = df
-
-    def body_size(self, candle):
-        return abs(candle["close"] - candle["open"])
-
-    def upper_wick(self, candle):
-        return candle["high"] - max(candle["open"], candle["close"])
-
-    def lower_wick(self, candle):
-        return min(candle["open"], candle["close"]) - candle["low"]
-
-    # ==========================================
-    # Bullish Rejection
-    # ==========================================
-
-    def bullish_rejection(self, index):
-
-        candle = self.df.iloc[index]
-
-        body = self.body_size(candle)
-        lower = self.lower_wick(candle)
-
-        if body == 0:
-            return False
-
-        return (
-            lower >= body * 2
-            and candle["close"] > candle["open"]
-        )
-
-    # ==========================================
-    # Bearish Rejection
-    # ==========================================
-
-    def bearish_rejection(self, index):
-
-        candle = self.df.iloc[index]
-
-        body = self.body_size(candle)
-        upper = self.upper_wick(candle)
-
-        if body == 0:
-            return False
-
-        return (
-            upper >= body * 2
-            and candle["close"] < candle["open"]
-        )
-
-    # ==========================================
-    # Strong Rejection
-    # ==========================================
-
-    def strong_rejection(self, index):
-
-        if self.bullish_rejection(index):
-            return "BUY"
-
-        if self.bearish_rejection(index):
-            return "SELL"
-
-        return None
-
-    # ==========================================
-    # Analyze
-    # ==========================================
-
-    def analyze(self, index):
-
-        return {
-            "bullish": self.bullish_rejection(index),
-            "bearish": self.bearish_rejection(index),
-            "signal": self.strong_rejection(index)
-        }
-# ==========================================
-# Professional SMC Bot V2
-# strategy/consolidation.py
-# ==========================================
-
-import numpy as np
-
-
-class ConsolidationDetector:
-
-    def __init__(self, df, lookback=8):
-        self.df = df
-        self.lookback = lookback
-
-    # ==========================================
-    # حساب نطاق الحركة
-    # ==========================================
-
-    def get_range(self, candles):
-
-        highest = candles["high"].max()
-        lowest = candles["low"].min()
-
-        return highest - lowest
-
-    # ==========================================
-    # متوسط حجم الشموع
-    # ==========================================
-
-    def average_body(self, candles):
-
-        bodies = abs(candles["close"] - candles["open"])
-
-        return np.mean(bodies)
-
-    # ==========================================
-    # كشف التجميع
-    # ==========================================
-
-    def is_consolidation(self):
-
-        if len(self.df) < self.lookback:
-            return False
-
-        candles = self.df.tail(self.lookback)
-
-        total_range = self.get_range(candles)
-
-        avg_body = self.average_body(candles)
-
-        # إذا كان النطاق ضيقاً مقارنة بمتوسط جسم الشموع
-        if total_range <= avg_body * 4:
-            return True
-
-        return False
-
-    # ==========================================
-    # قوة التجميع
-    # ==========================================
-
-    def consolidation_strength(self):
-
-        if not self.is_consolidation():
-            return 0
-
-        candles = self.df.tail(self.lookback)
-
-        total_range = self.get_range(candles)
-
-        avg_body = self.average_body(candles)
-
-        if avg_body == 0:
-            return 100
-
-        strength = (1 - (total_range / (avg_body * 4))) * 100
-
-        strength = max(0, min(100, strength))
-
-        return round(strength, 2)
-
-    # ==========================================
-    # التحليل النهائي
-    # ==========================================
-
-    def analyze(self):
-
-        return {
-            "is_consolidation": self.is_consolidation(),
-            "strength": self.consolidation_strength()
-        }
-# ==========================================
-# Professional SMC Bot V2
-# strategy/fake_breakout.py
-# ==========================================
-
-class FakeBreakoutDetector:
-
-    def __init__(self, df, lookback=10):
-        self.df = df
-        self.lookback = lookback
-
-    # ==========================================
-    # أعلى وأدنى مستوى سابق
-    # ==========================================
-
-    def previous_high(self, index):
-
-        if index < self.lookback:
-            return None
-
-        return self.df.iloc[
-            index-self.lookback:index
-        ]["high"].max()
-
-    def previous_low(self, index):
-
-        if index < self.lookback:
-            return None
-
-        return self.df.iloc[
-            index-self.lookback:index
-        ]["low"].min()
-
-    # ==========================================
-    # كسر كاذب للأعلى
-    # ==========================================
-
-    def fake_breakout_up(self, index):
-
-        high = self.previous_high(index)
-
-        if high is None:
-            return False
-
-        candle = self.df.iloc[index]
-
-        return (
-            candle["high"] > high and
-            candle["close"] < high
-        )
-
-    # ==========================================
-    # كسر كاذب للأسفل
-    # ==========================================
-
-    def fake_breakout_down(self, index):
-
-        low = self.previous_low(index)
-
-        if low is None:
-            return False
-
-        candle = self.df.iloc[index]
-
-        return (
-            candle["low"] < low and
-            candle["close"] > low
-        )
-
-    # ==========================================
-    # نوع الكسر
-    # ==========================================
-
-    def breakout_type(self, index):
-
-        if self.fake_breakout_up(index):
-            return "SELL"
-
-        if self.fake_breakout_down(index):
-            return "BUY"
-
-        return None
-
-    # ==========================================
-    # درجة قوة الكسر الكاذب
-    # ==========================================
-
-    def strength(self, index):
-
-        signal = self.breakout_type(index)
-
-        if signal is None:
-            return 0
-
-        candle = self.df.iloc[index]
-
-        body = abs(
-            candle["close"] - candle["open"]
-        )
-
-        full = candle["high"] - candle["low"]
-
-        if full == 0:
-            return 0
-
-        rejection = 1 - (body / full)
-
-        score = round(rejection * 100, 2)
-
-        return min(score, 100)
-
-    # ==========================================
-    # التحليل النهائي
-    # ==========================================
-
-    def analyze(self, index):
-
-        return {
-
-            "fake_breakout_up":
-                self.fake_breakout_up(index),
-
-            "fake_breakout_down":
-                self.fake_breakout_down(index),
-
-            "signal":
-                self.breakout_type(index),
-
-            "strength":
-                self.strength(index)
-
-        }
-
-# ==========================================
-# Professional SMC Bot V2
-# indicators.py
-# ==========================================
-
-import pandas as pd
-
-
-class Indicators:
-
-    def __init__(self, df):
-        self.df = df.copy()
-
-    # ==========================================
-    # EMA
-    # ==========================================
-
-    def ema(self, period):
-
-        return self.df["close"].ewm(
-            span=period,
-            adjust=False
-        ).mean()
-
-    def ema_trend(self):
-
-        ema20 = self.ema(20)
-        ema50 = self.ema(50)
-
-        if ema20.iloc[-1] > ema50.iloc[-1]:
-            return "BUY"
-
-        if ema20.iloc[-1] < ema50.iloc[-1]:
-            return "SELL"
-
-        return None
-
-    # ==========================================
-    # RSI
-    # ==========================================
-
-    def rsi(self, period=14):
-
-        delta = self.df["close"].diff()
-
-        gain = delta.clip(lower=0)
-
-        loss = -delta.clip(upper=0)
-
-        avg_gain = gain.rolling(period).mean()
-
-        avg_loss = loss.rolling(period).mean()
-
-        rs = avg_gain / avg_loss
-
-        rsi = 100 - (100 / (1 + rs))
-
-        return rsi
-
-    def rsi_signal(self):
-
-        value = self.rsi().iloc[-1]
-
-        if value <= 30:
-            return "BUY"
-
-        if value >= 70:
-            return "SELL"
-
-        return None
-
-    # ==========================================
-    # MACD
-    # ==========================================
-
-    def macd(self):
-
-        ema12 = self.df["close"].ewm(
-            span=12,
-            adjust=False
-        ).mean()
-
-        ema26 = self.df["close"].ewm(
-            span=26,
-            adjust=False
-        ).mean()
-
-        macd = ema12 - ema26
-
-        signal = macd.ewm(
-            span=9,
-            adjust=False
-        ).mean()
-
-        histogram = macd - signal
-
-        return macd, signal, histogram
-
-    def macd_signal(self):
-
-        macd, signal, hist = self.macd()
-
-        if (
-            hist.iloc[-2] < 0 and
-            hist.iloc[-1] > 0
-        ):
-            return "BUY"
-
-        if (
-            hist.iloc[-2] > 0 and
-            hist.iloc[-1] < 0
-        ):
-            return "SELL"
-
-        return None
-
-    # ==========================================
-    # Final Confirmation
-    # ==========================================
-
-    def confirmation(self):
-
-        return {
-
-            "ema": self.ema_trend(),
-
-            "rsi": self.rsi_signal(),
-
-            "macd": self.macd_signal()
-
-        }
-# ==========================================
-# Professional SMC Bot V2
-# telegram_bot.py
-# ==========================================
-
-import requests
-
-from config import BOT_TOKEN, CHANNEL_ID
-
-
-class TelegramBot:
-
-    def __init__(self):
-        self.token = BOT_TOKEN
-        self.channel = CHANNEL_ID
-
-    def send(self, message):
-
-        if not self.token or not self.channel:
-            print("[Telegram] BOT_TOKEN أو CHANNEL_ID غير موجود.")
-            return False
-
-        url = (
-            f"https://api.telegram.org/bot"
-            f"{self.token}/sendMessage"
-        )
-
-        payload = {
-            "chat_id": self.channel,
-            "text": message,
-            "parse_mode": "HTML"
-        }
-
-        try:
-
-            response = requests.post(
-                url,
-                data=payload,
-                timeout=10
-            )
-
-            if response.status_code == 200:
-                return True
-
-            print(response.text)
-            return False
-
-        except Exception as e:
-            print(f"[Telegram] {e}")
-            return False
-
-    def signal(
-        self,
-        pair,
-        direction,
-        confidence,
-        timeframe="5M"
-    ):
-
-        message = (
-            "📊 <b>Professional SMC Bot V2</b>\n\n"
-            f"💱 الزوج : {pair}\n"
-            f"📈 الاتجاه : {direction}\n"
-            f"⏱ الفريم : {timeframe}\n"
-            f"🎯 الثقة : {confidence}%"
-        )
-
-        return self.send(message)
-
-    def info(self, text):
-        return self.send(text)
-# ==========================================
-# Professional SMC Bot V2
-# scanner.py
-# ==========================================
-
-import time
-
-from config import (
-    WATCHLIST,
-    MIN_SIGNAL_INTERVAL,
-    MAX_SIGNALS_PER_DAY
-)
-
-from data.market import MarketData
-from strategy.strategy import SMCStrategy
-from telegram_bot import TelegramBot
-
-
-class Scanner:
-
-    def __init__(self):
-
-        self.market = MarketData()
-
-        self.telegram = TelegramBot()
-
-        self.last_signal = {}
-
-        self.daily_signals = 0
-
-    # ==========================================
-    # منع تكرار الإشارات
-    # ==========================================
-
-    def can_send(self, pair):
-
-        now = time.time()
-
-        if pair not in self.last_signal:
-            return True
-
-        return (
-            now - self.last_signal[pair]
-            >= MIN_SIGNAL_INTERVAL
-        )
-
-    # ==========================================
-    # حفظ وقت آخر إشارة
-    # ==========================================
-
-    def save_signal(self, pair):
-
-        self.last_signal[pair] = time.time()
-
-        self.daily_signals += 1
-
-    # ==========================================
-    # تحليل زوج واحد
-    # ==========================================
-
-    def analyze_pair(self, pair):
-
-        if self.daily_signals >= MAX_SIGNALS_PER_DAY:
-            return
-
-        if not self.can_send(pair):
-            return
-
-        df5, df1 = self.market.load(pair)
-
-        if df5 is None:
-            return
-
-        strategy = SMCStrategy(
-            df5,
-            df1
-        )
-
-        signal = strategy.run()
-
-        if signal is None:
-            return
-
-        self.telegram.signal(
-
-            pair=pair,
-
-            direction=signal["direction"],
-
-            confidence=signal["confidence"],
-
-            timeframe="5M"
-
-        )
-
-        self.save_signal(pair)
-
-    # ==========================================
-    # فحص جميع الأزواج
-    # ==========================================
-
-    def scan(self):
-
-        for pair in WATCHLIST:
-
-            try:
-
-                self.analyze_pair(pair)
-
-            except Exception as e:
-
-                print(f"[Scanner] {pair}: {e}")
-# ==========================================
-# Professional SMC Bot V2
-# main.py
-# ==========================================
-
-import time
-
-
-from config import (
-    BOT_NAME,
-    VERSION
-)
-
-
-from scanner import Scanner
-
-from utils.time_filter import TimeFilter
-
-
-
-def main():
-
-
-    print("=" * 50)
-    print(
-        f"{BOT_NAME} v{VERSION}"
-    )
-    print("=" * 50)
-
-
-
-    scanner = Scanner()
-
-
-    timer = TimeFilter(
-        start_hour=8,
-        end_hour=20,
-        timezone="UTC"
-    )
-
-
-
-    while True:
-
-
-        try:
-
-
-            if timer.allowed():
-
-
-                print(
-                    "[BOT] Scanning Market..."
-                )
-
-
-                scanner.scan()
-
-
-
-            else:
-
-
-                print(
-                    f"[BOT] {timer.status()}"
-                )
-
-
-
-            # فحص كل دقيقة
-
-            time.sleep(60)
-
-
-
-        except Exception as e:
-
-
-            print(
-                f"[MAIN ERROR] {e}"
-            )
-
-
-            # انتظار قبل إعادة المحاولة
-
-            time.sleep(30)
-
-
-
-
-
-if __name__ == "__main__":
-
-    main()
-# ==========================================
-# Professional SMC Bot V2
-# requirements.txt
-# ==========================================
-
-pandas>=2.2.0
-numpy>=1.26.0
-requests>=2.32.0
-python-dateutil>=2.9.0
-pytz>=2024.1
-# ==========================================
-# Professional SMC Bot V2
-# strategy/strategy.py
-# ==========================================
-
-from strategy.zones import ZoneDetector
-from strategy.price_action import PriceAction
-from strategy.smart_money import SmartMoneyConcepts
-from strategy.rejection import RejectionDetector
-from strategy.consolidation import ConsolidationDetector
-from strategy.fake_breakout import FakeBreakoutDetector
-
-from indicators import Indicators
-
-
-class SMCStrategy:
-
-    def __init__(self, df5, df1):
-
-        self.df5 = df5
-        self.df1 = df1
-
-        self.index = len(df5) - 1
-
-        self.zones = ZoneDetector(df5)
-
-        self.price = PriceAction(df5)
-
-        self.smc = SmartMoneyConcepts(df5)
-
-        self.rejection = RejectionDetector(df5)
-
-        self.consolidation = ConsolidationDetector(df5)
-
-        self.fake_breakout = FakeBreakoutDetector(df5)
-
-        self.indicators = Indicators(df5)
-
-
-    # ==========================================
-    # حساب قوة الإشارة
-    # ==========================================
-
-    def calculate_confidence(
-        self,
-        zone,
-        smc,
-        rejection,
-        fake,
-        indicators
-    ):
-
-        score = 0
-
-
-        # قوة المنطقة
-        if zone:
-            score += zone["score"] * 0.35
-
-
-        # Rejection
-        if rejection["signal"]:
-            score += 20
-
-
-        # Liquidity Sweep
-        if smc["liquidity"]:
-            score += 15
-
-
-        # FVG
-        if smc["fvg"]:
-            score += 10
-
-
-        # Fake breakout
-        if fake["signal"]:
-            score += 10
-
-
-        # Confirmation indicators
-        if indicators["ema"]:
-            score += 5
-
-
-        confidence = int(min(score,100))
-
-
-        return confidence
-
-
-
-    # ==========================================
-    # تشغيل التحليل
-    # ==========================================
-
-    def run(self):
-
-
-        # منع الدخول أثناء التجميع
-
-        consolidation = self.consolidation.analyze()
-
-        if consolidation["is_consolidation"]:
-            return None
-
-
-
-        # أفضل منطقة
-
-        zones = self.zones.detect()
-
-
-        if not zones:
-            return None
-
-
-        zone = zones[0]
-
-
-
-        # التحليلات
-
-        smc = self.smc.analyze(
-            self.index
-        )
-
-
-        rejection = self.rejection.analyze(
-            self.index
-        )
-
-
-        fake = self.fake_breakout.analyze(
-            self.index
-        )
-
-
-        indicators = self.indicators.confirmation()
-
-
-
-        direction = None
-
-
-
-        # ===============================
-        # شروط BUY
-        # ===============================
-
-        if zone["type"] == "BUY":
-
-            if rejection["signal"] == "BUY":
-
-                if (
-                    smc["liquidity"] == "BUY"
-                    or smc["bos"] == "BULLISH"
-                    or fake["signal"] == "BUY"
-                ):
-
-                    direction = "BUY"
-
-
-
-        # ===============================
-        # شروط SELL
-        # ===============================
-
-        if zone["type"] == "SELL":
-
-            if rejection["signal"] == "SELL":
-
-                if (
-                    smc["liquidity"] == "SELL"
-                    or smc["bos"] == "BEARISH"
-                    or fake["signal"] == "SELL"
-                ):
-
-                    direction = "SELL"
-
-
-
-        if direction is None:
-            return None
-
-
-
-        confidence = self.calculate_confidence(
-            zone,
-            smc,
-            rejection,
-            fake,
-            indicators
-        )
-
-
-        # الحد الأدنى للجودة
-
-        if confidence < 80:
-            return None
-
-
-
-        return {
-
-            "direction": direction,
-
-            "confidence": confidence,
-
-            "zone_score": zone["score"],
-
-            "smc": smc,
-
-            "rejection": rejection
-
-        }
-# ==========================================
-# Professional SMC Bot V2
-# data/provider.py
-# ==========================================
-
-import pandas as pd
-
-
-class DataProvider:
-
-    def __init__(self, name=""):
-        self.name = name
-
-
-    # ==========================================
-    # جلب الشموع
-    # ==========================================
-
-    def get_candles(self, pair, timeframe, limit=300):
-
-        """
-        هذه الدالة هي نقطة ربط مزود البيانات.
-
-        لاحقاً يتم ربطها مع API مجاني.
-        يجب أن تعيد DataFrame بالشكل:
-
-        open
-        high
-        low
-        close
-        volume (اختياري)
-        """
-
-        try:
-
-            data = []
-
-            df = pd.DataFrame(data)
-
-
-            return self.prepare(df)
-
-
-        except Exception as e:
-
-            print(
-                f"[DataProvider] {e}"
-            )
-
-            return pd.DataFrame()
-
-
-
-    # ==========================================
-    # تجهيز البيانات
-    # ==========================================
-
-    def prepare(self, df):
-
-        if df.empty:
-            return df
-
-
-        df = df.copy()
-
-
-        required = [
-            "open",
-            "high",
-            "low",
-            "close"
-        ]
-
-
-        for col in required:
-
-            if col not in df.columns:
-                return pd.DataFrame()
-
-
-
-        df = df.dropna()
-
-        df = df.reset_index(
-            drop=True
-        )
-
-
-        return df
-
-
-
-    # ==========================================
-    # فحص البيانات
-    # ==========================================
-
-    def validate(self, df):
-
-        if df is None:
-            return False
-
-
-        if df.empty:
-            return False
-
-
-        required = [
-            "open",
-            "high",
-            "low",
-            "close"
-        ]
-
-
-        for col in required:
-
-            if col not in df.columns:
-                return False
-
-
-        return True
+    ]
 # ==========================================
 # Professional SMC Bot V2
 # data/market.py
@@ -1894,117 +467,238 @@ class MarketData:
         return df5, df1
 # ==========================================
 # Professional SMC Bot V2
-# utils/time_filter.py
+# strategy/price_action.py
 # ==========================================
 
-import datetime
+class PriceAction:
 
-import pytz
+    def __init__(self, df):
+        self.df = df
 
+    def body_size(self, candle):
+        return abs(candle["close"] - candle["open"])
 
-class TimeFilter:
+    def upper_wick(self, candle):
+        return candle["high"] - max(candle["open"], candle["close"])
 
+    def lower_wick(self, candle):
+        return min(candle["open"], candle["close"]) - candle["low"]
 
-    def __init__(
-        self,
-        start_hour=8,
-        end_hour=20,
-        timezone="UTC"
-    ):
+    def is_bullish_pinbar(self, candle):
 
-        self.start_hour = start_hour
-        self.end_hour = end_hour
-
-        self.timezone = pytz.timezone(
-            timezone
-        )
-
-
-    # ==========================================
-    # الوقت الحالي
-    # ==========================================
-
-    def now(self):
-
-        return datetime.datetime.now(
-            self.timezone
-        )
-
-
-    # ==========================================
-    # يوم العمل
-    # ==========================================
-
-    def is_work_day(self):
-
-        current = self.now()
-
-        # الاثنين = 0
-        # الجمعة = 4
-
-        return current.weekday() in [
-            0,
-            1,
-            2,
-            3,
-            4
-        ]
-
-
-    # ==========================================
-    # ساعات التداول
-    # ==========================================
-
-    def is_trading_time(self):
-
-        current = self.now()
-
-        hour = current.hour
-
+        body = self.body_size(candle)
+        lower = self.lower_wick(candle)
+        upper = self.upper_wick(candle)
 
         return (
-            hour >= self.start_hour
-            and
-            hour <= self.end_hour
+            lower > body * 2 and
+            upper < body
         )
 
+    def is_bearish_pinbar(self, candle):
 
-    # ==========================================
-    # الفلتر النهائي
-    # ==========================================
+        body = self.body_size(candle)
+        upper = self.upper_wick(candle)
+        lower = self.lower_wick(candle)
 
-    def allowed(self):
+        return (
+            upper > body * 2 and
+            lower < body
+        )
 
-        if not self.is_work_day():
+    def bullish_engulfing(self, index):
 
+        if index == 0:
             return False
 
+        prev = self.df.iloc[index - 1]
+        curr = self.df.iloc[index]
 
-        if not self.is_trading_time():
+        return (
+            prev["close"] < prev["open"] and
+            curr["close"] > curr["open"] and
+            curr["open"] <= prev["close"] and
+            curr["close"] >= prev["open"]
+        )
 
+    def bearish_engulfing(self, index):
+
+        if index == 0:
             return False
 
+        prev = self.df.iloc[index - 1]
+        curr = self.df.iloc[index]
 
-        return True
+        return (
+            prev["close"] > prev["open"] and
+            curr["close"] < curr["open"] and
+            curr["open"] >= prev["close"] and
+            curr["close"] <= prev["open"]
+        )
 
+    def strong_bullish_candle(self, candle):
+
+        body = self.body_size(candle)
+
+        return (
+            candle["close"] > candle["open"] and
+            body > (candle["high"] - candle["low"]) * 0.70
+        )
+
+    def strong_bearish_candle(self, candle):
+
+        body = self.body_size(candle)
+
+        return (
+            candle["close"] < candle["open"] and
+            body > (candle["high"] - candle["low"]) * 0.70
+        )
+
+    def analyze(self, index):
+
+        candle = self.df.iloc[index]
+
+        result = {
+            "bullish_pinbar": self.is_bullish_pinbar(candle),
+            "bearish_pinbar": self.is_bearish_pinbar(candle),
+            "bullish_engulfing": self.bullish_engulfing(index),
+            "bearish_engulfing": self.bearish_engulfing(index),
+            "strong_bullish": self.strong_bullish_candle(candle),
+            "strong_bearish": self.strong_bearish_candle(candle)
+        }
+
+        return result
+# ==========================================
+# Professional SMC Bot V2
+# indicators.py
+# ==========================================
+
+import pandas as pd
+
+
+class Indicators:
+
+    def __init__(self, df):
+        self.df = df.copy()
 
     # ==========================================
-    # حالة الفلتر
+    # EMA
     # ==========================================
 
-    def status(self):
+    def ema(self, period):
 
-        if not self.is_work_day():
+        return self.df["close"].ewm(
+            span=period,
+            adjust=False
+        ).mean()
 
-            return "Weekend"
+    def ema_trend(self):
 
+        ema20 = self.ema(20)
+        ema50 = self.ema(50)
 
-        if not self.is_trading_time():
+        if ema20.iloc[-1] > ema50.iloc[-1]:
+            return "BUY"
 
-            return "Outside Trading Hours"
+        if ema20.iloc[-1] < ema50.iloc[-1]:
+            return "SELL"
 
+        return None
 
-        return "ACTIVE"
+    # ==========================================
+    # RSI
+    # ==========================================
+
+    def rsi(self, period=14):
+
+        delta = self.df["close"].diff()
+
+        gain = delta.clip(lower=0)
+
+        loss = -delta.clip(upper=0)
+
+        avg_gain = gain.rolling(period).mean()
+
+        avg_loss = loss.rolling(period).mean()
+
+        rs = avg_gain / avg_loss
+
+        rsi = 100 - (100 / (1 + rs))
+
+        return rsi
+
+    def rsi_signal(self):
+
+        value = self.rsi().iloc[-1]
+
+        if value <= 30:
+            return "BUY"
+
+        if value >= 70:
+            return "SELL"
+
+        return None
+
+    # ==========================================
+    # MACD
+    # ==========================================
+
+    def macd(self):
+
+        ema12 = self.df["close"].ewm(
+            span=12,
+            adjust=False
+        ).mean()
+
+        ema26 = self.df["close"].ewm(
+            span=26,
+            adjust=False
+        ).mean()
+
+        macd = ema12 - ema26
+
+        signal = macd.ewm(
+            span=9,
+            adjust=False
+        ).mean()
+
+        histogram = macd - signal
+
+        return macd, signal, histogram
+
+    def macd_signal(self):
+
+        macd, signal, hist = self.macd()
+
+        if (
+            hist.iloc[-2] < 0 and
+            hist.iloc[-1] > 0
+        ):
+            return "BUY"
+
+        if (
+            hist.iloc[-2] > 0 and
+            hist.iloc[-1] < 0
+        ):
+            return "SELL"
+
+        return None
+
+    # ==========================================
+    # Final Confirmation
+    # ==========================================
+
+    def confirmation(self):
+
+        return {
+
+            "ema": self.ema_trend(),
+
+            "rsi": self.rsi_signal(),
+
+            "macd": self.macd_signal()
+
+        }
 # ==========================================
 # Professional SMC Bot V2
 # smc_engine.py
@@ -2266,6 +960,222 @@ class SMCEngine:
 
             "fvg":
                 fvg
+
+        }
+# ==========================================
+# Professional SMC Bot V2
+# strategy/strategy.py
+# ==========================================
+
+from strategy.zones import ZoneDetector
+from strategy.price_action import PriceAction
+from strategy.smart_money import SmartMoneyConcepts
+from strategy.rejection import RejectionDetector
+from strategy.consolidation import ConsolidationDetector
+from strategy.fake_breakout import FakeBreakoutDetector
+
+from indicators import Indicators
+
+
+class SMCStrategy:
+
+    def __init__(self, df5, df1):
+
+        self.df5 = df5
+        self.df1 = df1
+
+        self.index = len(df5) - 1
+
+        self.zones = ZoneDetector(df5)
+
+        self.price = PriceAction(df5)
+
+        self.smc = SmartMoneyConcepts(df5)
+
+        self.rejection = RejectionDetector(df5)
+
+        self.consolidation = ConsolidationDetector(df5)
+
+        self.fake_breakout = FakeBreakoutDetector(df5)
+
+        self.indicators = Indicators(df5)
+
+
+    # ==========================================
+    # حساب قوة الإشارة
+    # ==========================================
+
+    def calculate_confidence(
+        self,
+        zone,
+        smc,
+        rejection,
+        fake,
+        indicators
+    ):
+
+        score = 0
+
+
+        # قوة المنطقة
+        if zone:
+            score += zone["score"] * 0.35
+
+
+        # Rejection
+        if rejection["signal"]:
+            score += 20
+
+
+        # Liquidity Sweep
+        if smc["liquidity"]:
+            score += 15
+
+
+        # FVG
+        if smc["fvg"]:
+            score += 10
+
+
+        # Fake breakout
+        if fake["signal"]:
+            score += 10
+
+
+        # Confirmation indicators
+        if indicators["ema"]:
+            score += 5
+
+
+        confidence = int(min(score,100))
+
+
+        return confidence
+
+
+
+    # ==========================================
+    # تشغيل التحليل
+    # ==========================================
+
+    def run(self):
+
+
+        # منع الدخول أثناء التجميع
+
+        consolidation = self.consolidation.analyze()
+
+        if consolidation["is_consolidation"]:
+            return None
+
+
+
+        # أفضل منطقة
+
+        zones = self.zones.detect()
+
+
+        if not zones:
+            return None
+
+
+        zone = zones[0]
+
+
+
+        # التحليلات
+
+        smc = self.smc.analyze(
+            self.index
+        )
+
+
+        rejection = self.rejection.analyze(
+            self.index
+        )
+
+
+        fake = self.fake_breakout.analyze(
+            self.index
+        )
+
+
+        indicators = self.indicators.confirmation()
+
+
+
+        direction = None
+
+
+
+        # ===============================
+        # شروط BUY
+        # ===============================
+
+        if zone["type"] == "BUY":
+
+            if rejection["signal"] == "BUY":
+
+                if (
+                    smc["liquidity"] == "BUY"
+                    or smc["bos"] == "BULLISH"
+                    or fake["signal"] == "BUY"
+                ):
+
+                    direction = "BUY"
+
+
+
+        # ===============================
+        # شروط SELL
+        # ===============================
+
+        if zone["type"] == "SELL":
+
+            if rejection["signal"] == "SELL":
+
+                if (
+                    smc["liquidity"] == "SELL"
+                    or smc["bos"] == "BEARISH"
+                    or fake["signal"] == "SELL"
+                ):
+
+                    direction = "SELL"
+
+
+
+        if direction is None:
+            return None
+
+
+
+        confidence = self.calculate_confidence(
+            zone,
+            smc,
+            rejection,
+            fake,
+            indicators
+        )
+
+
+        # الحد الأدنى للجودة
+
+        if confidence < 80:
+            return None
+
+
+
+        return {
+
+            "direction": direction,
+
+            "confidence": confidence,
+
+            "zone_score": zone["score"],
+
+            "smc": smc,
+
+            "rejection": rejection
 
         }
 # ==========================================
@@ -2586,124 +1496,174 @@ class RiskManager:
         return True
 # ==========================================
 # Professional SMC Bot V2
-# config.py
+# telegram_bot.py
 # ==========================================
 
+import requests
 
-# ==========================================
-# BOT INFORMATION
-# ==========================================
-
-BOT_NAME = "Professional SMC Bot V2"
-
-VERSION = "2.0"
+from config import BOT_TOKEN, CHANNEL_ID
 
 
+class TelegramBot:
 
-# ==========================================
-# TIME SETTINGS
-# ==========================================
+    def __init__(self):
+        self.token = BOT_TOKEN
+        self.channel = CHANNEL_ID
 
-TIMEZONE = "Africa/Algiers"
+    def send(self, message):
 
+        if not self.token or not self.channel:
+            print("[Telegram] BOT_TOKEN أو CHANNEL_ID غير موجود.")
+            return False
 
-# أيام العمل
-# Monday = 0
-# Friday = 4
+        url = (
+            f"https://api.telegram.org/bot"
+            f"{self.token}/sendMessage"
+        )
 
-WORK_DAYS = [
-    0,
-    1,
-    2,
-    3,
-    4
-]
+        payload = {
+            "chat_id": self.channel,
+            "text": message,
+            "parse_mode": "HTML"
+        }
 
+        try:
 
-# وقت التداول
+            response = requests.post(
+                url,
+                data=payload,
+                timeout=10
+            )
 
-START_HOUR = 11
+            if response.status_code == 200:
+                return True
 
-END_HOUR = 20
+            print(response.text)
+            return False
 
+        except Exception as e:
+            print(f"[Telegram] {e}")
+            return False
 
+    def signal(
+        self,
+        pair,
+        direction,
+        confidence,
+        timeframe="5M"
+    ):
 
-# ==========================================
-# SIGNAL SETTINGS
-# ==========================================
+        message = (
+            "📊 <b>Professional SMC Bot V2</b>\n\n"
+            f"💱 الزوج : {pair}\n"
+            f"📈 الاتجاه : {direction}\n"
+            f"⏱ الفريم : {timeframe}\n"
+            f"🎯 الثقة : {confidence}%"
+        )
 
-MAX_SIGNALS_PER_DAY = 15
+        return self.send(message)
 
-
-MINIMUM_SIGNAL_SCORE = 70
-
-
-
-# ==========================================
-# MARKET SETTINGS
-# ==========================================
-
-TIMEFRAME_MAIN = "5m"
-
-TIMEFRAME_FILTER = "1m"
-
-
-
-# ==========================================
-# EXCLUDED MARKETS
-# ==========================================
-
-EXCLUDED_PAIRS = [
-
-    "XAUUSD",
-
-    "GOLD",
-
-    "OTC"
-
-]
-
-
-
-# ==========================================
-# TELEGRAM SETTINGS
-# ==========================================
-
-# ضع بيانات Telegram هنا
-
-TELEGRAM_TOKEN = "PUT_YOUR_TOKEN_HERE"
-
-
-TELEGRAM_CHAT_ID = "PUT_YOUR_CHAT_ID_HERE"
-
-
-
-# ==========================================
-# RISK SETTINGS
-# ==========================================
-
-ALLOW_MARTINGALE = False
-
-
-MAX_RETRY_SIGNAL = 1
-
-
-
-# ==========================================
-# DATA SETTINGS
-# ==========================================
-
-DATA_LIMIT = 100
-
-
-# API لاحقاً
-
-MARKET_API_URL = None
+    def info(self, text):
+        return self.send(text)
 # ==========================================
 # Professional SMC Bot V2
-# render.yaml
+# main.py
 # ==========================================
 
+import time
+
+
+from config import (
+    BOT_NAME,
+    VERSION
+)
+
+
+from scanner import Scanner
+
+from utils.time_filter import TimeFilter
+
+
+
+def main():
+
+
+    print("=" * 50)
+    print(
+        f"{BOT_NAME} v{VERSION}"
+    )
+    print("=" * 50)
+
+
+
+    scanner = Scanner()
+
+
+    timer = TimeFilter(
+        start_hour=8,
+        end_hour=20,
+        timezone="UTC"
+    )
+
+
+
+    while True:
+
+
+        try:
+
+
+            if timer.allowed():
+
+
+                print(
+                    "[BOT] Scanning Market..."
+                )
+
+
+                scanner.scan()
+
+
+
+            else:
+
+
+                print(
+                    f"[BOT] {timer.status()}"
+                )
+
+
+
+            # فحص كل دقيقة
+
+            time.sleep(60)
+
+
+
+        except Exception as e:
+
+
+            print(
+                f"[MAIN ERROR] {e}"
+            )
+
+
+            # انتظار قبل إعادة المحاولة
+
+            time.sleep(30)
+
+
+
+
+
+if __name__ == "__main__":
+
+    main()
+pandas>=2.2.0
+numpy>=1.26.0
+requests>=2.32.0
+python-dateutil>=2.9.0
+pytz>=2024.1
 services:
 
   - type: worker
