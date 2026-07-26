@@ -2005,3 +2005,720 @@ class TimeFilter:
 
 
         return "ACTIVE"
+# ==========================================
+# Professional SMC Bot V2
+# smc_engine.py
+# ==========================================
+
+
+class SMCEngine:
+
+
+    def __init__(self):
+
+        pass
+
+
+
+    # ==========================================
+    # كشف Order Block صعودي
+    # ==========================================
+
+    def bullish_order_block(
+        self,
+        candles
+    ):
+
+        if len(candles) < 3:
+
+            return None
+
+
+
+        last = candles.iloc[-1]
+
+        previous = candles.iloc[-2]
+
+
+        # شمعة هبوط قبل صعود قوي
+
+        if (
+            previous["close"]
+            <
+            previous["open"]
+
+            and
+
+            last["close"]
+            >
+            last["open"]
+        ):
+
+            return {
+
+                "type": "BULLISH_OB",
+
+                "high":
+                    previous["high"],
+
+                "low":
+                    previous["low"]
+
+            }
+
+
+        return None
+
+
+
+    # ==========================================
+    # كشف Order Block هبوطي
+    # ==========================================
+
+    def bearish_order_block(
+        self,
+        candles
+    ):
+
+        if len(candles) < 3:
+
+            return None
+
+
+
+        last = candles.iloc[-1]
+
+        previous = candles.iloc[-2]
+
+
+
+        if (
+            previous["close"]
+            >
+            previous["open"]
+
+            and
+
+            last["close"]
+            <
+            last["open"]
+
+        ):
+
+
+            return {
+
+                "type": "BEARISH_OB",
+
+                "high":
+                    previous["high"],
+
+                "low":
+                    previous["low"]
+
+            }
+
+
+
+        return None
+
+
+
+    # ==========================================
+    # كشف Fair Value Gap
+    # ==========================================
+
+    def detect_fvg(
+        self,
+        candles
+    ):
+
+        if len(candles) < 3:
+
+            return None
+
+
+
+        c1 = candles.iloc[-3]
+
+        c2 = candles.iloc[-2]
+
+        c3 = candles.iloc[-1]
+
+
+
+        # FVG صاعد
+
+        if c1["high"] < c3["low"]:
+
+            return {
+
+                "type":
+                    "BULLISH_FVG",
+
+                "top":
+                    c3["low"],
+
+                "bottom":
+                    c1["high"]
+
+            }
+
+
+
+        # FVG هابط
+
+        if c1["low"] > c3["high"]:
+
+            return {
+
+                "type":
+                    "BEARISH_FVG",
+
+                "top":
+                    c1["low"],
+
+                "bottom":
+                    c3["high"]
+
+            }
+
+
+
+        return None
+
+
+
+    # ==========================================
+    # تحديد قوة المنطقة
+    # ==========================================
+
+    def zone_strength(
+        self,
+        zone,
+        rejection_score=0
+    ):
+
+        score = 0
+
+
+
+        if zone:
+
+            score += 40
+
+
+
+        if rejection_score >= 60:
+
+            score += 30
+
+
+
+        if rejection_score >= 80:
+
+            score += 20
+
+
+
+        return min(
+            score,
+            100
+        )
+
+
+
+    # ==========================================
+    # التحليل الكامل
+    # ==========================================
+
+    def analyze(
+        self,
+        candles
+    ):
+
+
+        bullish_ob = self.bullish_order_block(
+            candles
+        )
+
+
+        bearish_ob = self.bearish_order_block(
+            candles
+        )
+
+
+        fvg = self.detect_fvg(
+            candles
+        )
+
+
+
+        return {
+
+            "bullish_order_block":
+                bullish_ob,
+
+
+            "bearish_order_block":
+                bearish_ob,
+
+
+            "fvg":
+                fvg
+
+        }
+# ==========================================
+# Professional SMC Bot V2
+# signal_manager.py
+# ==========================================
+
+from datetime import datetime
+
+
+class SignalManager:
+
+
+    def __init__(self, filters):
+
+        self.filters = filters
+
+        self.last_signals = {}
+
+
+
+    # ==========================================
+    # منع تكرار الإشارة
+    # ==========================================
+
+    def duplicate_signal(
+        self,
+        pair,
+        direction
+    ):
+
+        key = f"{pair}_{direction}"
+
+
+        if key in self.last_signals:
+
+            return True
+
+
+        return False
+
+
+
+    # ==========================================
+    # حفظ الإشارة
+    # ==========================================
+
+    def save_signal(
+        self,
+        pair,
+        direction
+    ):
+
+        key = f"{pair}_{direction}"
+
+
+        self.last_signals[key] = {
+
+            "time":
+                datetime.now(),
+
+            "direction":
+                direction
+
+        }
+
+
+        self.filters.register_signal()
+
+
+
+    # ==========================================
+    # إنشاء الإشارة النهائية
+    # ==========================================
+
+    def create_signal(
+        self,
+        pair,
+        analysis
+    ):
+
+
+        if not analysis:
+
+            return None
+
+
+
+        direction = analysis.get(
+            "signal"
+        )
+
+
+        if not direction:
+
+            return None
+
+
+
+        if self.duplicate_signal(
+            pair,
+            direction
+        ):
+
+            return None
+
+
+
+        if not self.filters.allow_new_signal():
+
+            return None
+
+
+
+        self.save_signal(
+            pair,
+            direction
+        )
+
+
+
+        return {
+
+            "pair":
+                pair,
+
+            "direction":
+                direction,
+
+            "score":
+                analysis.get(
+                    "score",
+                    0
+                ),
+
+            "reason":
+                analysis.get(
+                    "reason",
+                    ""
+                ),
+
+            "time":
+                datetime.now().strftime(
+                    "%H:%M"
+                )
+
+        }
+
+
+
+    # ==========================================
+    # تنظيف الإشارات القديمة
+    # ==========================================
+
+    def clear_old_signals(self):
+
+        now = datetime.now()
+
+
+        remove = []
+
+
+        for key, data in self.last_signals.items():
+
+            diff = (
+                now - data["time"]
+            ).seconds
+
+
+            # حذف بعد ساعة
+
+            if diff > 3600:
+
+                remove.append(key)
+
+
+
+        for key in remove:
+
+            del self.last_signals[key]
+# ==========================================
+# Professional SMC Bot V2
+# risk_manager.py
+# ==========================================
+
+
+class RiskManager:
+
+
+    def __init__(
+        self,
+        minimum_score=70,
+        max_daily_signals=15
+    ):
+
+        self.minimum_score = minimum_score
+
+        self.max_daily_signals = max_daily_signals
+
+        self.daily_signals = 0
+
+
+
+    # ==========================================
+    # فحص قوة الإشارة
+    # ==========================================
+
+    def check_signal_quality(
+        self,
+        signal
+    ):
+
+
+        if not signal:
+
+            return False
+
+
+
+        score = signal.get(
+            "score",
+            0
+        )
+
+
+        if score < self.minimum_score:
+
+            return False
+
+
+
+        return True
+
+
+
+    # ==========================================
+    # منع كثرة الإشارات
+    # ==========================================
+
+    def allow_signal(self):
+
+
+        if (
+            self.daily_signals
+            >=
+            self.max_daily_signals
+        ):
+
+            return False
+
+
+
+        return True
+
+
+
+    # ==========================================
+    # تسجيل إشارة
+    # ==========================================
+
+    def register_signal(self):
+
+        self.daily_signals += 1
+
+
+
+    # ==========================================
+    # إعادة العداد
+    # ==========================================
+
+    def reset(self):
+
+        self.daily_signals = 0
+
+
+
+    # ==========================================
+    # منع المضاعفة
+    # ==========================================
+
+    def allow_martingale(
+        self
+    ):
+
+        # المشروع يعمل بدون مضاعفة
+
+        return False
+
+
+
+    # ==========================================
+    # القرار النهائي
+    # ==========================================
+
+    def approve(
+        self,
+        signal
+    ):
+
+
+        if not self.allow_signal():
+
+            return False
+
+
+
+        if not self.check_signal_quality(
+            signal
+        ):
+
+            return False
+
+
+
+        self.register_signal()
+
+
+        return True
+# ==========================================
+# Professional SMC Bot V2
+# config.py
+# ==========================================
+
+
+# ==========================================
+# BOT INFORMATION
+# ==========================================
+
+BOT_NAME = "Professional SMC Bot V2"
+
+VERSION = "2.0"
+
+
+
+# ==========================================
+# TIME SETTINGS
+# ==========================================
+
+TIMEZONE = "Africa/Algiers"
+
+
+# أيام العمل
+# Monday = 0
+# Friday = 4
+
+WORK_DAYS = [
+    0,
+    1,
+    2,
+    3,
+    4
+]
+
+
+# وقت التداول
+
+START_HOUR = 11
+
+END_HOUR = 20
+
+
+
+# ==========================================
+# SIGNAL SETTINGS
+# ==========================================
+
+MAX_SIGNALS_PER_DAY = 15
+
+
+MINIMUM_SIGNAL_SCORE = 70
+
+
+
+# ==========================================
+# MARKET SETTINGS
+# ==========================================
+
+TIMEFRAME_MAIN = "5m"
+
+TIMEFRAME_FILTER = "1m"
+
+
+
+# ==========================================
+# EXCLUDED MARKETS
+# ==========================================
+
+EXCLUDED_PAIRS = [
+
+    "XAUUSD",
+
+    "GOLD",
+
+    "OTC"
+
+]
+
+
+
+# ==========================================
+# TELEGRAM SETTINGS
+# ==========================================
+
+# ضع بيانات Telegram هنا
+
+TELEGRAM_TOKEN = "PUT_YOUR_TOKEN_HERE"
+
+
+TELEGRAM_CHAT_ID = "PUT_YOUR_CHAT_ID_HERE"
+
+
+
+# ==========================================
+# RISK SETTINGS
+# ==========================================
+
+ALLOW_MARTINGALE = False
+
+
+MAX_RETRY_SIGNAL = 1
+
+
+
+# ==========================================
+# DATA SETTINGS
+# ==========================================
+
+DATA_LIMIT = 100
+
+
+# API لاحقاً
+
+MARKET_API_URL = None
+# ==========================================
+# Professional SMC Bot V2
+# render.yaml
+# ==========================================
+
+services:
+
+  - type: worker
+
+    name: professional-smc-bot-v2
+
+    runtime: python
+
+    buildCommand: 
+      pip install -r requirements.txt
+
+    startCommand:
+      python main.py
+
+    envVars:
+
+      - key: PYTHON_VERSION
+        value: 3.11
