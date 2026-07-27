@@ -718,266 +718,178 @@ class Indicators:
         }
 # ==========================================
 # Professional SMC Bot V2
-# smc_engine.py
+# strategy/price_action.py
 # ==========================================
 
-
-class SMCEngine:
-
-
-    def __init__(self):
-
-        pass
+from config import (
+    STRONG_CANDLE_BODY_RATIO,
+    PINBAR_WICK_RATIO,
+    PINBAR_BODY_RATIO
+)
 
 
+class PriceAction:
+
+    def __init__(self, df):
+        self.df = df
 
     # ==========================================
-    # كشف Order Block صعودي
+    # حجم جسم الشمعة
     # ==========================================
+    def body_size(self, candle):
+        return abs(candle["close"] - candle["open"])
 
-    def bullish_order_block(
-        self,
-        candles
-    ):
+    # ==========================================
+    # الذيل العلوي
+    # ==========================================
+    def upper_wick(self, candle):
+        return candle["high"] - max(candle["open"], candle["close"])
 
-        if len(candles) < 3:
+    # ==========================================
+    # الذيل السفلي
+    # ==========================================
+    def lower_wick(self, candle):
+        return min(candle["open"], candle["close"]) - candle["low"]
 
+    # ==========================================
+    # طول الشمعة بالكامل
+    # ==========================================
+    def candle_range(self, candle):
+        return candle["high"] - candle["low"]
+
+    # ==========================================
+    # Bullish Pin Bar
+    # ==========================================
+    def is_bullish_pinbar(self, candle):
+
+        full = self.candle_range(candle)
+
+        if full <= 0:
+            return False
+
+        body = self.body_size(candle)
+        lower = self.lower_wick(candle)
+        upper = self.upper_wick(candle)
+
+        return (
+            lower >= full * PINBAR_WICK_RATIO and
+            body <= full * PINBAR_BODY_RATIO and
+            upper <= body
+        )
+
+    # ==========================================
+    # Bearish Pin Bar
+    # ==========================================
+    def is_bearish_pinbar(self, candle):
+
+        full = self.candle_range(candle)
+
+        if full <= 0:
+            return False
+
+        body = self.body_size(candle)
+        upper = self.upper_wick(candle)
+        lower = self.lower_wick(candle)
+
+        return (
+            upper >= full * PINBAR_WICK_RATIO and
+            body <= full * PINBAR_BODY_RATIO and
+            lower <= body
+        )
+
+    # ==========================================
+    # Bullish Engulfing
+    # ==========================================
+    def bullish_engulfing(self, index):
+
+        if index <= 0 or index >= len(self.df):
+            return False
+
+        prev = self.df.iloc[index - 1]
+        curr = self.df.iloc[index]
+
+        if self.body_size(prev) == 0:
+            return False
+
+        return (
+            prev["close"] < prev["open"] and
+            curr["close"] > curr["open"] and
+            curr["open"] <= prev["close"] and
+            curr["close"] >= prev["open"]
+        )
+
+    # ==========================================
+    # Bearish Engulfing
+    # ==========================================
+    def bearish_engulfing(self, index):
+
+        if index <= 0 or index >= len(self.df):
+            return False
+
+        prev = self.df.iloc[index - 1]
+        curr = self.df.iloc[index]
+
+        if self.body_size(prev) == 0:
+            return False
+
+        return (
+            prev["close"] > prev["open"] and
+            curr["close"] < curr["open"] and
+            curr["open"] >= prev["close"] and
+            curr["close"] <= prev["open"]
+        )
+
+    # ==========================================
+    # شمعة صاعدة قوية
+    # ==========================================
+    def strong_bullish_candle(self, candle):
+
+        full = self.candle_range(candle)
+
+        if full <= 0:
+            return False
+
+        body = self.body_size(candle)
+
+        return (
+            candle["close"] > candle["open"] and
+            body >= full * STRONG_CANDLE_BODY_RATIO
+        )
+
+    # ==========================================
+    # شمعة هابطة قوية
+    # ==========================================
+    def strong_bearish_candle(self, candle):
+
+        full = self.candle_range(candle)
+
+        if full <= 0:
+            return False
+
+        body = self.body_size(candle)
+
+        return (
+            candle["close"] < candle["open"] and
+            body >= full * STRONG_CANDLE_BODY_RATIO
+        )
+
+    # ==========================================
+    # التحليل النهائي
+    # ==========================================
+    def analyze(self, index):
+
+        if index < 0 or index >= len(self.df):
             return None
 
-
-
-        last = candles.iloc[-1]
-
-        previous = candles.iloc[-2]
-
-
-        # شمعة هبوط قبل صعود قوي
-
-        if (
-            previous["close"]
-            <
-            previous["open"]
-
-            and
-
-            last["close"]
-            >
-            last["open"]
-        ):
-
-            return {
-
-                "type": "BULLISH_OB",
-
-                "high":
-                    previous["high"],
-
-                "low":
-                    previous["low"]
-
-            }
-
-
-        return None
-
-
-
-    # ==========================================
-    # كشف Order Block هبوطي
-    # ==========================================
-
-    def bearish_order_block(
-        self,
-        candles
-    ):
-
-        if len(candles) < 3:
-
-            return None
-
-
-
-        last = candles.iloc[-1]
-
-        previous = candles.iloc[-2]
-
-
-
-        if (
-            previous["close"]
-            >
-            previous["open"]
-
-            and
-
-            last["close"]
-            <
-            last["open"]
-
-        ):
-
-
-            return {
-
-                "type": "BEARISH_OB",
-
-                "high":
-                    previous["high"],
-
-                "low":
-                    previous["low"]
-
-            }
-
-
-
-        return None
-
-
-
-    # ==========================================
-    # كشف Fair Value Gap
-    # ==========================================
-
-    def detect_fvg(
-        self,
-        candles
-    ):
-
-        if len(candles) < 3:
-
-            return None
-
-
-
-        c1 = candles.iloc[-3]
-
-        c2 = candles.iloc[-2]
-
-        c3 = candles.iloc[-1]
-
-
-
-        # FVG صاعد
-
-        if c1["high"] < c3["low"]:
-
-            return {
-
-                "type":
-                    "BULLISH_FVG",
-
-                "top":
-                    c3["low"],
-
-                "bottom":
-                    c1["high"]
-
-            }
-
-
-
-        # FVG هابط
-
-        if c1["low"] > c3["high"]:
-
-            return {
-
-                "type":
-                    "BEARISH_FVG",
-
-                "top":
-                    c1["low"],
-
-                "bottom":
-                    c3["high"]
-
-            }
-
-
-
-        return None
-
-
-
-    # ==========================================
-    # تحديد قوة المنطقة
-    # ==========================================
-
-    def zone_strength(
-        self,
-        zone,
-        rejection_score=0
-    ):
-
-        score = 0
-
-
-
-        if zone:
-
-            score += 40
-
-
-
-        if rejection_score >= 60:
-
-            score += 30
-
-
-
-        if rejection_score >= 80:
-
-            score += 20
-
-
-
-        return min(
-            score,
-            100
-        )
-
-
-
-    # ==========================================
-    # التحليل الكامل
-    # ==========================================
-
-    def analyze(
-        self,
-        candles
-    ):
-
-
-        bullish_ob = self.bullish_order_block(
-            candles
-        )
-
-
-        bearish_ob = self.bearish_order_block(
-            candles
-        )
-
-
-        fvg = self.detect_fvg(
-            candles
-        )
-
-
+        candle = self.df.iloc[index]
 
         return {
-
-            "bullish_order_block":
-                bullish_ob,
-
-
-            "bearish_order_block":
-                bearish_ob,
-
-
-            "fvg":
-                fvg
-
+            "bullish_pinbar": self.is_bullish_pinbar(candle),
+            "bearish_pinbar": self.is_bearish_pinbar(candle),
+            "bullish_engulfing": self.bullish_engulfing(index),
+            "bearish_engulfing": self.bearish_engulfing(index),
+            "strong_bullish": self.strong_bullish_candle(candle),
+            "strong_bearish": self.strong_bearish_candle(candle)
         }
 # ==========================================
 # Professional SMC Bot V2
